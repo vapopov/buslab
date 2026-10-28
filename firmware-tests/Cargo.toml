@@ -1,0 +1,10 @@
+[package]
+name = "bridge-firmware-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+embassy-futures = "0.1.2"
+embassy-sync = "0.8.0"
+embedded-hal-async = "1.0"

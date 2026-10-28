@@ -1,7 +1,12 @@
+use crate::i2c_worker::{self, Message, Requests, Responses};
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_futures::{join::join3, select::select};
+use embassy_futures::{
+    join::{join, join4},
+    select::select,
+};
 use embassy_nrf::buffered_uarte::BufferedUarte;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
+use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::I2c;
 use trouble_host::prelude::*;
 
@@ -32,39 +37,15 @@ struct Server {
     serial: SerialService,
 }
 
-async fn execute<I: I2c>(i2c: &mut I, request: &[u8; FRAME_SIZE]) -> [u8; FRAME_SIZE] {
-    let mut response = [0; FRAME_SIZE];
-    response[0] = request[0];
-    let address = request[1];
-    let wlen = request[2] as usize;
-    let rlen = request[3] as usize;
-    if !(0x08..=0x77).contains(&address) || wlen > 16 || rlen > 18 || (wlen == 0 && rlen == 0) {
-        response[1] = 1;
-        return response;
-    }
-    let mut input = [0; 18];
-    let output = &request[4..4 + wlen];
-    let operation = async {
-        match (wlen, rlen) {
-            (0, _) => i2c.read(address, &mut input[..rlen]).await,
-            (_, 0) => i2c.write(address, output).await,
-            _ => i2c.write_read(address, output, &mut input[..rlen]).await,
-        }
-    };
-    // Do not cancel a TWIM transfer while EasyDMA still owns these buffers.
-    match operation.await {
-        Ok(()) => response[2..2 + rlen].copy_from_slice(&input[..rlen]),
-        Err(_) => response[1] = 2,
-    }
-    response
-}
-
 pub async fn run<C: Controller, I: I2c>(
     controller: C,
-    mut i2c: I,
+    i2c: I,
     uart: BufferedUarte<'_>,
     address: Address,
 ) {
+    let requests = Requests::new();
+    let responses = Responses::new();
+    let i2c_busy = AtomicBool::new(false);
     let (mut uart_rx, mut uart_tx) = uart.split();
     let queue: Channel<NoopRawMutex, [u8; FRAME_SIZE], 64> = Channel::new();
     let connected = AtomicBool::new(false);
@@ -76,7 +57,7 @@ pub async fn run<C: Controller, I: I2c>(
     let mut runner = stack.runner();
     let mut peripheral = stack.peripheral();
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: "BLE-I2C",
+        name: "BLE-I2C-UART-v2",
         appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
     }))
     .unwrap();
@@ -84,12 +65,15 @@ pub async fn run<C: Controller, I: I2c>(
     let length = AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-            AdStructure::CompleteLocalName(b"BLE-I2C"),
+            AdStructure::CompleteLocalName(b"BLE-I2C-UART-v2"),
         ],
         &mut advertising,
     )
     .unwrap();
-    join3(
+    join4(
+        i2c_worker::run(i2c, &requests, &responses, &i2c_busy, || {
+            Timer::after(Duration::from_millis(250))
+        }),
         async {
             // Always drain the physical UART, including while disconnected.
             loop {
@@ -110,6 +94,7 @@ pub async fn run<C: Controller, I: I2c>(
             runner.run().await.unwrap();
         },
         async {
+            let mut session = 0u32;
             loop {
                 let advertiser = match peripheral
                     .advertise(
@@ -135,7 +120,8 @@ pub async fn run<C: Controller, I: I2c>(
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-                defmt::info!("BLE connected");
+                defmt::info!("BLE connected: UART enabled, firmware v2");
+                session = session.wrapping_add(1);
                 while queue.try_receive().is_ok() {}
                 overflow.store(false, Ordering::Relaxed);
                 connected.store(true, Ordering::Relaxed);
@@ -210,15 +196,30 @@ pub async fn run<C: Controller, I: I2c>(
                                         reply.send().await;
                                     }
                                     if let Some(request) = request {
-                                        let response = execute(&mut i2c, &request).await;
-                                        if server
-                                            .uart
-                                            .tx
-                                            .notify(&connection, &response, true)
-                                            .await
-                                            .is_err()
+                                        if i2c_busy
+                                            .compare_exchange(
+                                                false,
+                                                true,
+                                                Ordering::Relaxed,
+                                                Ordering::Relaxed,
+                                            )
+                                            .is_ok()
                                         {
-                                            break;
+                                            requests
+                                                .send(Message {
+                                                    session,
+                                                    frame: request,
+                                                })
+                                                .await;
+                                        } else {
+                                            let mut response = [0; FRAME_SIZE];
+                                            response[0] = request[0];
+                                            response[1] = 4; // Previous hardware transfer still active.
+                                            let _ = server
+                                                .uart
+                                                .tx
+                                                .notify(&connection, &response, true)
+                                                .await;
                                         }
                                     }
                                 }
@@ -226,18 +227,33 @@ pub async fn run<C: Controller, I: I2c>(
                             }
                         }
                     },
-                    async {
-                        loop {
-                            let frame = queue.receive().await;
-                            if overflow.swap(false, Ordering::Relaxed) {
-                                let mut status = [0; FRAME_SIZE];
-                                status[0] = 1;
-                                let _ = server.serial.tx.notify(&connection, &status, true).await;
+                    join(
+                        async {
+                            loop {
+                                let response = responses.receive().await;
+                                if response.session == session {
+                                    let _ = server
+                                        .uart
+                                        .tx
+                                        .notify(&connection, &response.frame, true)
+                                        .await;
+                                }
                             }
-                            // Subscription is independent of the existing I2C notifications.
-                            let _ = server.serial.tx.notify(&connection, &frame, true).await;
-                        }
-                    },
+                        },
+                        async {
+                            loop {
+                                let frame = queue.receive().await;
+                                if overflow.swap(false, Ordering::Relaxed) {
+                                    let mut status = [0; FRAME_SIZE];
+                                    status[0] = 1;
+                                    let _ =
+                                        server.serial.tx.notify(&connection, &status, true).await;
+                                }
+                                // Subscription is independent of the existing I2C notifications.
+                                let _ = server.serial.tx.notify(&connection, &frame, true).await;
+                            }
+                        },
+                    ),
                 )
                 .await;
                 connected.store(false, Ordering::Relaxed);

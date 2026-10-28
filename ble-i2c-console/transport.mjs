@@ -2,7 +2,7 @@ import { SERVICE, RX, TX, decodeResponse, UART_SERVICE, UART_RX, UART_TX, uartFr
 export class Bridge {
   constructor(bluetooth, emit = () => {}) {
     this.bluetooth = bluetooth; this.emit = emit; this.device = null; this.rx = null; this.tx = null; this.pending = null; this.tainted = false;
-    this.uartRx = null; this.uartTx = null; this.uartBusy = false;
+    this.uartRx = null; this.uartTx = null; this.uartBusy = false; this.uartUnavailableReason = null;
     this.onUartNotification = event => {
       const view = event.target.value;
       try { this.emit('uart-data', decodeUart(new Uint8Array(view.buffer, view.byteOffset, view.byteLength))); }
@@ -24,16 +24,25 @@ export class Bridge {
       this.tx = await service.getCharacteristic(TX);
       this.tx.addEventListener('characteristicvaluechanged', this.onNotification);
       await this.tx.startNotifications();
+      this.uartUnavailableReason = null;
+      let uart;
       try {
-        const uart = await server.getPrimaryService(UART_SERVICE);
-        this.uartRx = await uart.getCharacteristic(UART_RX);
-        this.uartTx = await uart.getCharacteristic(UART_TX);
-        this.uartTx.addEventListener('characteristicvaluechanged', this.onUartNotification);
-        await this.uartTx.startNotifications();
+        uart = await server.getPrimaryService(UART_SERVICE);
       } catch (e) {
         if (e.name !== 'NotFoundError') throw e;
-        if (this.uartTx) this.uartTx.removeEventListener('characteristicvaluechanged', this.onUartNotification);
-        this.uartRx = null; this.uartTx = null;
+        this.uartUnavailableReason = 'UART service was not found. Select BLE-I2C-UART-v2 after flashing the latest firmware. If already selected, forget the saved device in Bluetooth settings and reconnect to refresh its services.';
+      }
+      if (uart) {
+        try {
+          this.uartRx = await uart.getCharacteristic(UART_RX);
+          this.uartTx = await uart.getCharacteristic(UART_TX);
+          this.uartTx.addEventListener('characteristicvaluechanged', this.onUartNotification);
+          await this.uartTx.startNotifications();
+        } catch (e) {
+          if (this.uartTx) this.uartTx.removeEventListener('characteristicvaluechanged', this.onUartNotification);
+          this.uartRx = null; this.uartTx = null;
+          this.uartUnavailableReason = `UART service found, but setup failed (${e.name}: ${e.message}). Disconnect and reconnect; if this persists, forget the saved device to refresh its services.`;
+        }
       }
       this.tainted = false;
       this.emit('connected', device.name || 'BLE-I2C');

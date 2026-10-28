@@ -16,7 +16,7 @@ used as fallbacks if it cannot load.
 ## Use
 
 1. Disconnect the phone's nRF Connect session (firmware allows one connection).
-2. Click Connect device and choose BLE-I2C. Allow browser/OS Bluetooth access.
+2. Click Connect device and choose BLE-I2C-UART-v2. Allow browser/OS Bluetooth access.
 3. Enter the unshifted 7-bit I2C address in hex (08 through 77).
 4. Enter up to 16 hex write bytes, such as A0 01 FF or A001FF.
 5. Choose the read count in decimal (0 through 18).
@@ -72,3 +72,18 @@ Data received while disconnected is discarded.
 
 For loopback validation, connect D6 to D7 and send a short text/hex message.
 Physical Bluetooth and UART validation must be performed on the board.
+
+## Firmware v2 troubleshooting
+
+Select **BLE-I2C-UART-v2** after flashing the rebuilt firmware. This revision uses
+a fresh BLE address to avoid an old cached I2C-only service table. If UART setup
+fails, the terminal status now identifies whether the service is missing or
+characteristic/notification setup failed. Forget the saved device and reconnect
+if the host still uses a stale service table.
+
+An unplugged I2C bus now has internal idle pull-ups. With no target, requests
+should report an I2C error. Stuck transfers report a firmware timeout after
+250 ms without freezing Bluetooth or UART. Status 4 means hardware is still
+busy; release the stuck lines or reset the board if needed. These replies are
+completed transactions, so the console keeps the connection usable. A browser
+response timeout still requires reconnecting because delivery is uncertain.

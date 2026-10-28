@@ -1,16 +1,28 @@
-Validation of UART extension (2026-10-28)
+Validation of UART discovery and I2C liveness fixes (2026-10-28)
 
 Target: thumbv7em-none-eabihf / nRF52840
 cargo build --release --locked --offline: PASSED
-cargo fmt: completed
-Console: 13 Node.js tests PASSED, including existing I2C tests and UART binary
-chunking, notification decoding, old-firmware compatibility, subscription cleanup,
-and partial-send failure without retries.
-Console rendered and inspected in a browser, including the UART terminal.
+cargo fmt --check: PASSED
+Firmware worker regression tests (host aarch64-apple-darwin): 2 PASSED
+Console Node.js tests: 17 PASSED
 
-UART: P1.11 TX, P1.12 RX; 115200 baud, 8-N-1, no hardware flow control.
-I2C: P0.04 SDA, P0.05 SCL; 100 kHz.
+Firmware tests execute the actual I2C worker with simulated hardware and deadlines:
+- Address NACK returns I2C error, then subsequent requests can succeed.
+- Stuck transfer reports status 3 at the deadline without dropping the active
+  transfer future or its DMA buffers; busy stays set until hardware completes.
+- Late completion is not forwarded to a new connection; subsequent work recovers.
+
+Console regressions cover UART discovery/notification setup errors, subscription
+cleanup, and firmware timeout/busy replies leaving UART usable.
+
+BLE name: BLE-I2C-UART-v2
+Example static random BLE address: C0:05:04:03:02:02 (changed to refresh GATT discovery)
+UART: P1.11 TX, P1.12 RX; 115200 baud, 8-N-1, no flow control.
+I2C: P0.04 SDA, P0.05 SCL; 100 kHz; internal idle pull-ups enabled.
+I2C application deadline: 250 ms; physically stuck transfer remains reserved until
+hardware completes. BLE/UART continue. Reset may be needed to release a stuck bus.
 Firmware output: target/thumbv7em-none-eabihf/release/embassy-nrf-i2c-bridge
 
 No physical board flashing, BLE connection, UART loopback or I2C hardware test
-was performed. Throughput and overflow behavior require hardware validation.
+was performed. Cached-service diagnosis remains a hypothesis until verified on
+the user's host and board. This build uses a new identity to avoid the old cache.

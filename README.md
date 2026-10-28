@@ -34,6 +34,8 @@ as required by nrf-sdc/nrf-mpsl 0.4.0. Use the included Cargo.lock.
 - SDA: P0.04 (XIAO D4)
 - SCL: P0.05 (XIAO D5)
 - I2C speed: 100 kHz
+- Internal SDA/SCL pull-ups keep an unplugged bus idle-high. External pull-ups
+  are still recommended for a connected bus.
 - Connect target ground to nRF ground and use external SDA/SCL pull-ups to the
   compatible logic supply (typically 3.3 V). Do not pull GPIO up to USB VBUS.
 - TWIM's constructor takes SDA first, then SCL. The earlier snippets had this reversed.
@@ -54,7 +56,7 @@ cargo run --release --locked
 
 ## BLE protocol
 
-Advertised name: BLE-I2C. Connect with a BLE client; this is not a Bluetooth
+Advertised name: BLE-I2C-UART-v2. Connect with a BLE client; this is not a Bluetooth
 Classic serial/COM port. Enable notifications on TX before sending commands.
 
 NUS service: 6e400001-b5a3-f393-e0a9-e50e24dcca9e
@@ -73,10 +75,13 @@ Exactly 20 bytes per command, zero-padding unused bytes:
 
 At least one length must be nonzero. A combined write/read uses a repeated START.
 The 20-byte notification is `[request_id, status, read_data..., zero_padding...]`.
-Status 0 = success, 1 = invalid command, 2 = I2C error.
-There is no application timeout: the firmware awaits hardware completion instead
-of cancelling an in-flight EasyDMA transfer. A physically stuck bus can require
-a reset; automatic bus recovery is not implemented.
+Status 0 = success, 1 = invalid command, 2 = I2C error, 3 = deadline expired,
+4 = previous I2C hardware transfer still active.
+A 250 ms application deadline reports status 3 if hardware has not completed.
+The I2C worker keeps the in-flight EasyDMA buffers alive until hardware finishes;
+Bluetooth handling and UART continue independently. Further I2C requests return
+status 4 while that transfer is still active. Release the stuck line or reset the
+board if it cannot finish. Automatic bus recovery is not implemented.
 Send one command and wait for its notification before sending the next.
 An ATT write acknowledgement only acknowledges receipt; the notification carries
 transaction completion. Do not blindly retry writes after a lost response: the
@@ -105,7 +110,7 @@ No physical BLE connection or I2C hardware testing was possible here.
 
 ## Physical UART (XIAO nRF52840)
 
-The same BLE-I2C device and connection expose a second, custom GATT service.
+The same BLE-I2C-UART-v2 device and connection expose a second, custom GATT service.
 The original I2C service and 20-byte protocol remain compatible with existing clients.
 
 - TX: P1.11 (XIAO D6), connect to target RX.
@@ -144,3 +149,27 @@ layout may need its saved device association cleared.
 
 For a first hardware check, connect D6 to D7, send text from the UART terminal,
 and confirm the same bytes appear as RX. Then remove the loopback and wire the target.
+
+## Upgrading from the first UART build
+
+This revision advertises as **BLE-I2C-UART-v2** and changes the example static
+random address from C0:05:04:03:02:01 to C0:05:04:03:02:02. This deliberately gives
+hosts a fresh identity after adding the UART GATT service. Choose the new name
+in the browser device picker; disconnect other clients first. If only the old
+name appears after a power cycle, verify the firmware file and flashing process.
+The console now distinguishes a missing service from characteristic/subscription
+setup failures instead of calling every NotFoundError an old firmware version.
+
+A connected peripheral is normally absent from a new-device scan while its one
+BLE connection is active. Disconnect in the console before checking advertising.
+I2C transfers no longer hold up disconnect processing or the advertising loop.
+
+Host firmware regression tests (using the actual I2C worker with simulated hardware):
+
+```sh
+cargo test --manifest-path firmware-tests/Cargo.toml --target aarch64-apple-darwin --locked --offline
+```
+
+Replace the target with your host triple on another platform. Tests cover a NACK
+from an absent target, deadline expiry without DMA cancellation, retaining busy
+state until hardware completes, discarding late results, and subsequent recovery.

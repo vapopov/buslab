@@ -34,7 +34,7 @@ export function decodeResponse(bytes, request) {
   if (bytes.length !== 20) throw new Error(`Invalid response length: ${bytes.length}; expected 20.`);
   if (bytes[0] !== request.id) throw new Error('Response ID does not match the request.');
   const status = bytes[1];
-  const messages = { 0: 'Success', 1: 'Invalid command', 2: 'I²C error — check address, wiring, pull-ups and target power.', 3: 'Firmware reported an I²C timeout.' };
+  const messages = { 0: 'Success', 1: 'Invalid command', 2: 'I²C error — check address, wiring, pull-ups and target power.', 3: 'I²C timed out. Check wiring and pull-ups. The write may already have executed; UART remains available.', 4: 'I²C is still busy after a timeout. Release the bus or reset the board. UART remains available.' };
   if (!(status in messages)) throw new Error(`Unknown firmware status 0x${hex(status)}.`);
   return { status, message: messages[status], data: status === 0 ? bytes.slice(2, 2 + request.readLength) : new Uint8Array(), frame: bytes.slice() };
 }

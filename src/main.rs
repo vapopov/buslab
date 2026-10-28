@@ -11,6 +11,7 @@ use panic_probe as _;
 use static_cell::StaticCell;
 
 mod bridge;
+mod i2c_worker;
 
 bind_interrupts!(struct Irqs {
     EGU0_SWI0 => mpsl::LowPrioInterruptHandler;
@@ -70,6 +71,9 @@ async fn main(spawner: Spawner) {
 
     let mut i2c_config = twim::Config::default();
     i2c_config.frequency = twim::Frequency::K100;
+    // Keep an unplugged bus idle-high; external pull-ups are still recommended.
+    i2c_config.sda_pullup = true;
+    i2c_config.scl_pullup = true;
     let mut tx_buffer = [0u8; 32];
     // Twim::new takes SDA FIRST, then SCL.
     let i2c = twim::Twim::new(
@@ -97,7 +101,8 @@ async fn main(spawner: Spawner) {
         &mut uart_rx_buffer,
         &mut uart_tx_buffer,
     );
+    // Changed for the v2 GATT layout so hosts rediscover the added UART service.
     // A fixed example address; assign a unique static-random address per unit.
-    let address = trouble_host::prelude::Address::random([1, 2, 3, 4, 5, 0xC0]);
+    let address = trouble_host::prelude::Address::random([2, 2, 3, 4, 5, 0xC0]);
     bridge::run(controller, i2c, uart, address).await;
 }

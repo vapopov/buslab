@@ -121,3 +121,44 @@ test('UART partial send failure stops subsequent chunks without retry', async ()
   await assert.rejects(bridge.sendUart(new Uint8Array(60)), /Link lost/);
   assert.equal(writes, 2); assert.equal(bridge.uartBusy, false); bridge.disconnect();
 });
+
+test('missing UART service explains firmware identity and stale service cache', async () => {
+  const {bridge} = setup(async () => {}); await bridge.connect();
+  assert.match(bridge.uartUnavailableReason, /BLE-I2C-UART-v2/);
+  assert.match(bridge.uartUnavailableReason, /refresh its services/);
+  bridge.disconnect();
+});
+test('UART characteristic discovery failure preserves I2C and reports actual setup error', async () => {
+  const error = new Error('RX characteristic missing'); error.name = 'NotFoundError';
+  const uart = { getCharacteristic: async () => {throw error;} };
+  const {bridge} = setup(async () => {}, uart); await bridge.connect();
+  assert.equal(bridge.connected, true); assert.equal(bridge.uartRx, null);
+  assert.match(bridge.uartUnavailableReason, /service found, but setup failed/);
+  assert.match(bridge.uartUnavailableReason, /RX characteristic missing/);
+  bridge.disconnect();
+});
+test('UART notification subscription failure removes listener and preserves I2C', async () => {
+  let received = 0;
+  const tx = new EventTarget(); tx.startNotifications = async () => { throw new Error('Subscribe failed'); };
+  const uart = {getCharacteristic: async uuid => uuid === UART_RX ? {} : tx};
+  const {bridge} = setup(async () => {}, uart, kind => {if (kind === 'uart-data') received++;});
+  await bridge.connect();
+  assert.equal(bridge.connected, true); assert.equal(bridge.uartTx, null);
+  assert.match(bridge.uartUnavailableReason, /Subscribe failed/);
+  tx.value = new DataView(new ArrayBuffer(20)); tx.dispatchEvent(new Event('characteristicvaluechanged'));
+  assert.equal(received,0); bridge.disconnect();
+});
+test('I2C firmware timeout and bus-busy replies do not taint transport or block UART', async () => {
+  let status = 3, uartWrites = 0;
+  const tx = new EventTarget(); tx.startNotifications = async () => {};
+  const uart = {getCharacteristic: async uuid => uuid === UART_RX ? {writeValueWithResponse: async () => {uartWrites++;}} : tx};
+  const {bridge} = setup(async (frame, notify) => notify.notify(Uint8Array.from([frame[0], status, ...Array(18).fill(0)])), uart);
+  await bridge.connect();
+  const timeout = await bridge.transact(makeRequest(1,'50','10','2'));
+  assert.equal(timeout.status,3); assert.equal(bridge.tainted,false);
+  await bridge.sendUart(Uint8Array.of(65)); assert.equal(uartWrites,1);
+  status = 4; const busy = await bridge.transact(makeRequest(2,'50','10','2'));
+  assert.equal(busy.status,4); assert.match(busy.message,/still busy/);
+  status = 0; assert.equal((await bridge.transact(makeRequest(3,'50','10','2'))).status,0);
+  bridge.disconnect();
+});

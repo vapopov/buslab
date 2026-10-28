@@ -48,7 +48,7 @@ function updateControls() {
   $('connect').textContent = connecting ? 'Connecting…' : 'Connect device ＋';
   $('disconnect').hidden = !connected;
   $('uart-send').disabled = !connected || !bridge.uartRx || uartSending || busy;
-  $('uart-status').textContent = connected ? (bridge.uartRx ? 'UART ready · receiving live data' : 'UART unavailable on this firmware. Update firmware and reconnect.') : 'Connect to check UART availability.';
+  $('uart-status').textContent = connected ? (bridge.uartRx ? 'UART ready · receiving live data' : bridge.uartUnavailableReason || 'UART unavailable. Reconnect to refresh device services.') : 'Connect to check UART availability.';
   const valid = validate();
   $('send').disabled = !connected || uartSending || busy || !valid || bridge.tainted;
   $('send').textContent = busy ? 'Waiting for response…' : bridge.tainted ? 'Reconnect to continue' : 'Send transaction ↗';
