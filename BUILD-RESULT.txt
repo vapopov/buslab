@@ -1,0 +1,16 @@
+Validation of UART extension (2026-10-28)
+
+Target: thumbv7em-none-eabihf / nRF52840
+cargo build --release --locked --offline: PASSED
+cargo fmt: completed
+Console: 13 Node.js tests PASSED, including existing I2C tests and UART binary
+chunking, notification decoding, old-firmware compatibility, subscription cleanup,
+and partial-send failure without retries.
+Console rendered and inspected in a browser, including the UART terminal.
+
+UART: P1.11 TX, P1.12 RX; 115200 baud, 8-N-1, no hardware flow control.
+I2C: P0.04 SDA, P0.05 SCL; 100 kHz.
+Firmware output: target/thumbv7em-none-eabihf/release/embassy-nrf-i2c-bridge
+
+No physical board flashing, BLE connection, UART loopback or I2C hardware test
+was performed. Throughput and overflow behavior require hardware validation.

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f6f7f9"><title>BLE I²C + UART Console</title><meta name="description" content="A Bluetooth I²C workbench. Send hexadecimal commands, read responses, and inspect individual bits."><link rel="stylesheet" href="style.css"><script type="module" src="app.js"></script></head>
+<body>
+<header class="topbar"><a class="brand" href="./"><span class="brand-icon">⌁</span><span>bus<span class="brand-light">lab</span><span class="brand-tag">BLE / I²C / UART</span></span></a><div class="top-right"><span class="local-dot"></span> Direct device connection <span class="version">v1.0</span></div></header>
+<main>
+<div class="heading"><div><div class="eyebrow">YOUR WIRELESS WORKBENCH</div><h1>BLE I²C + UART Console<span class="title-dot">.</span></h1><p>Send bytes. Read registers. See every bit.</p></div><button id="sample" class="button secondary">Explore a sample <span>↗</span></button></div>
+<div id="compatibility" class="notice" hidden></div>
+<section class="connection card" aria-label="Bluetooth connection"><div class="device-icon">ᛒ</div><div class="connection-info"><div class="connection-title">nRF52840 <span class="chip">Nordic UART</span></div><div id="connection-description">Connect to your BLE-I2C bridge to get started.</div></div><div class="connection-actions"><span id="connection-status" class="status"><i></i>Disconnected</span><button id="connect" class="button primary">Connect device <span>＋</span></button><button id="disconnect" class="button secondary" hidden>Disconnect</button></div></section>
+<div class="workspace">
+<section class="card command-card"><div class="section-heading"><div><span class="section-number">01</span><h2>Transaction</h2></div><span class="subtle mono">I²C MASTER</span></div>
+<form id="command-form" novalidate>
+<div class="field-row"><div class="field"><label for="address">Device address <span>HEX</span></label><div class="input-prefix"><span>0x</span><input id="address" value="50" maxlength="4" spellcheck="false" autocomplete="off" aria-describedby="address-help"></div><small id="address-help">7-bit · 08–77 · unshifted</small></div><div class="field"><label for="read-length">Read after write <span>BYTES</span></label><input id="read-length" type="number" value="2" min="0" max="18" step="1"><small>0–18 bytes · decimal count</small></div></div>
+<div class="field write-field"><label for="write-data">Write data <span id="write-count">1 / 16 BYTES</span></label><textarea id="write-data" rows="4" spellcheck="false" placeholder="A0 01 FF" aria-describedby="write-help">10</textarea><small id="write-help">Hex bytes separated by spaces, or a continuous hex string.</small></div>
+<div class="operation-line"><span class="operation-label">OPERATION</span><span id="operation" class="operation-value">WRITE <b>→</b> REPEATED START <b>→</b> READ</span></div>
+<div id="validation" class="validation" role="status"></div>
+<button id="send" class="button send-button" type="submit" disabled>Send transaction <span>↗</span></button>
+<div class="keyboard-hint"><kbd>⌘</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</div>
+</form>
+<details class="protocol"><summary>Packet & connection details <span>＋</span></summary><p>One request at a time. Reads follow writes with a repeated START. Leave write data empty for a read-only transaction, or set read count to 0 for write-only.</p><p>Requests are 20 bytes: ID, address, write length, read length, then zero-padded write data. The console removes response headers and padding from the data display.</p><p class="mono uuid">NUS service<br>6e400001-b5a3-f393-e0a9-e50e24dcca9e</p><p>Open this page directly in Chrome or Edge. Disconnect the phone’s nRF Connect session first. All transactions stay in this browser tab; nothing is sent to a server.</p></details>
+</section>
+<div class="right-column">
+<section class="card response-card"><div class="section-heading"><div><span class="section-number">02</span><h2>Response</h2></div><span id="response-badge" class="subtle">Awaiting transaction</span></div><div id="response-content" class="response-content"><div class="empty-state"><div class="empty-icon">[ · · ]</div><h3>Bytes will land here</h3><p>Connect and send a transaction.<br>Click any returned byte to inspect its bits.</p></div></div></section>
+<section class="card inspector-card"><div class="section-heading"><div><span class="section-number">03</span><h2>Bit inspector</h2></div><span class="subtle mono">MSB → LSB</span></div><div id="inspector" class="inspector-empty"><span class="inspector-placeholder">Select a response byte</span><p>A closer look, one bit at a time.</p></div></section>
+</div></div>
+<section class="card history-card uart-card" aria-label="UART console">
+<div class="section-heading"><div><h2>UART terminal</h2></div><span class="subtle mono">115200 · 8-N-1 · TX P1.11 / RX P1.12</span></div>
+<p id="uart-status">Connect to check UART availability.</p>
+<form id="uart-form">
+<div class="field-row"><div class="field"><label for="uart-mode">Send format</label><select id="uart-mode"><option value="text">Text (UTF-8)</option><option value="hex">Hex bytes</option></select></div><div class="field"><label for="uart-ending">Text line ending</label><select id="uart-ending"><option value="">None</option><option value="lf">LF</option><option value="crlf">CR + LF</option></select></div></div>
+<div class="field"><label for="uart-input">Send data</label><textarea id="uart-input" rows="2" maxlength="4096" placeholder="Type a command or choose Hex bytes" spellcheck="false"></textarea></div>
+<button id="uart-send" class="button primary" disabled>Send UART ↗</button><button id="uart-clear" class="button secondary" type="button">Clear log</button>
+</form>
+<pre id="uart-log" class="uart-log" aria-label="UART receive and transmit log"></pre>
+<p class="subtle">Live RX shows hex and decoded text. Keep the connection open to receive data. A send confirmation means bytes were queued; it does not confirm a reply from the target.</p>
+</section>
+<section class="card history-card"><div class="section-heading"><div><span class="history-icon">↳</span><h2>Activity</h2><span id="history-count" class="count">0</span></div><button id="clear" class="text-button">Clear activity</button></div><div id="history" class="history"><div class="history-empty">Your session’s transactions will appear here.</div></div></section>
+<footer><span><span class="footer-dot"></span> Built for BLE-I2C on nRF52840</span><span>16 bytes write <span class="separator">/</span> 18 bytes read <span class="separator">/</span> 100 kHz bus</span></footer>
+</main><div id="toast" class="toast" role="status" hidden></div>
+</body></html>
