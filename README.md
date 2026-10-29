@@ -71,7 +71,8 @@ NUS service: 6e400001-b5a3-f393-e0a9-e50e24dcca9e
 RX (write with response): 6e400002-b5a3-f393-e0a9-e50e24dcca9e
 TX (notify): 6e400003-b5a3-f393-e0a9-e50e24dcca9e
 
-Exactly 20 bytes per command, zero-padding unused bytes:
+Legacy transactions (up to 18 read bytes) use exactly 20 bytes per command,
+zero-padding unused bytes. Larger reads use the extension described below:
 
 | Byte | Meaning |
 | --- | --- |
@@ -205,3 +206,140 @@ of its in-flight DMA buffers, while Bluetooth/UART continue operating.
 
 A 1 ms pause between probes gives the driver's requested STOP time to finish
 before another START and yields to BLE processing. No scan retries are performed.
+
+## Large reads over 20-byte Bluetooth packets
+
+The console and scripting API now support **0 through 2047 read bytes** and up to
+32768 write bytes per transaction. Writes above 16 bytes use the buffered
+request protocol below. A combined write/read sends the command once,
+uses a repeated START, reads the whole requested block, then stops. Splitting
+happens only on Bluetooth; it does not create extra I2C reads or repeat the command.
+Read lengths up to 18 keep the original packet format for existing clients.
+
+For a larger read, the 20-byte request is:
+
+- Byte 0: request ID.
+- Byte 1: 0x80 OR the unshifted 7-bit I2C target address.
+- Byte 2: write length (low 5 bits) OR ((read length >> 8) << 5).
+- Byte 3: low byte of read length.
+- Bytes 4–19: up to 16 command bytes, padded with zeros.
+
+The extended read length must be 19–2047. Old firmware rejects the extended
+address with status 1, which the new client reports as requiring updated firmware.
+Error replies keep the existing `[id, status, padding...]` format and return no data.
+Successful large reads return these 20-byte notifications in order:
+
+1. Begin: `[id, 0x80, total_lo, total_hi, padding (16 bytes)]`.
+2. Data: `[id, 0x81, offset_lo, offset_hi, data (up to 16 bytes), padding]`.
+3. End: `[id, 0x82, total_lo, total_hi, padding (16 bytes)]`.
+
+Offsets count only I2C read bytes, starting at zero. Final payload length is
+inferred from total length. The browser checks IDs, total length, sequential
+byte offsets and the end marker. Missing/duplicate/out-of-order fragments fail
+rather than returning partial bytes. A response timeout requires reconnecting;
+no I2C command is automatically retried. Large Bluetooth responses have a 15 s
+client timeout; the physical I2C transfer keeps its existing 250 ms deadline.
+
+The onboard **blue LED on P0.06** is initialized off (active-low). Incoming I2C/UART
+BLE data writes and outgoing I2C/UART response packets trigger short activity pulses.
+A separate async loop drives 15 ms on/off pulses without delaying I2C or BLE.
+Closely spaced events coalesce into a visible flicker; it is an activity indicator,
+not an exact packet counter. The green P0.30 connection indicator is unchanged.
+
+## JavaScript scripts and selected binary files
+
+The I2C tab includes an editable JavaScript field, file picker, Run/Stop buttons,
+progress and a bounded log. The edited source is saved locally in the browser.
+Files are read as raw bytes; the selected file is not automatically uploaded to
+any server or sent to a device. Scripts execute only after Run is clicked.
+
+The script environment supplies:
+
+| Name | Behavior |
+| --- | --- |
+| `file` | Selected binary as a Uint8Array (empty when no file is selected). |
+| `fileName` | Selected file name. |
+| `await i2c.write(address, bytes)` | One I2C write, up to 32768 bytes. |
+| `await i2c.read(address, count)` | One I2C read, up to 2047 bytes. |
+| `await i2c.writeRead(address, bytes, count)` | Command write + repeated START + one read. |
+| `await i2c.transfer(address, bytes, count)` | General write/read operation; returns read bytes. |
+| `await sleep(ms)` | Delay without blocking the page. |
+| `log(...)`, `progress(sent, total)` | Append output and update upload progress. |
+| `ascii(string)`, `text(bytes)`, `hex(bytes)` | Encode UTF-8, decode UTF-8, or format hex. |
+
+Await I2C calls. Calls are serialized, and I2C status errors reject the script's
+operation. No write is automatically retried. Normal I2C/scan/UART send controls
+are locked during a script; receiving and tab switching remain active. Stop
+terminates the script worker, discards queued calls and waits for the dispatched
+I2C transaction to finish or time out before unlocking controls. It cannot undo
+commands that already reached the target. Run only trusted scripts: the worker
+is an execution-isolation mechanism, not a security sandbox for arbitrary code.
+
+## Buffered writes and staging
+
+Writes of 17–32768 bytes are assembled from 20-byte BLE packets before one I2C
+transaction is executed. This supports a 64-byte DATA1 register payload plus its
+register and length prefix (66 write bytes total). Up to 2047 bytes can follow the
+write using a repeated START. Existing writes of up to 16 bytes stay compatible.
+
+Request frames reserve byte 1 = 0x01 (outside the supported I2C target range):
+
+| Frame | Layout (remaining bytes zero-padded) |
+| --- | --- |
+| Begin | `[id, 1, 0, address, write_len_lo, write_len_hi, read_len_lo, read_len_hi, stage_flag]` |
+| Data | `[id, 1, 1, offset_lo, offset_hi, payload (up to 15 bytes)]` |
+| Commit | `[id, 1, 2]` |
+| Write staged | `[id, 1, 3, target_address]` |
+| Abort | `[id, 1, 4]` |
+
+Begin and data frames receive ATT acknowledgements only. The firmware checks the
+ID, sequential offsets, length and commit before touching I2C. Normal commit
+executes one continuous transaction and returns the usual response (fragmented
+if the read is larger than 18 bytes). Invalid/incomplete uploads execute nothing.
+
+`await i2c.stage(file)` sets stage_flag=1, address=0, read length=0. Commit then
+acknowledges buffering with status 0 and performs no I2C operation. Small command
+writes/reads can run while that file remains staged. `await i2c.writeStaged(address)`
+consumes the staged file in one local I2C write, without inserting register/length
+bytes. One upload buffer is shared; while a file is staged, use short command
+writes until it is consumed, or restage or disconnect to replace/discard it.
+
+The buffer has static storage and ownership moves to the I2C worker for DMA.
+It is returned only after hardware completes, including after an application
+timeout. Disconnect discards upload/staged state; incomplete files cannot execute
+on a later connection. The buffer is 32 KiB. At 100 kHz a maximum-size raw write
+needs approximately 3 seconds of wire time; the application deadline is 250 ms
+plus 0.1 ms per buffered write byte. An in-flight hardware transfer is never
+cancelled, and timed-out writes are never retried automatically.
+
+Uploads refresh the browser's 15-second inactivity deadline on each acknowledged
+packet. Stop during buffering sends Abort before Commit; Stop after execution
+starts waits for its result. No command can undo data already delivered to a target.
+
+## TPS25751 Patch Burst Mode example
+
+The default JavaScript now follows [TI SLVAFV8A](https://www.ti.com/lit/pdf/slvafv8)
+and [SLVUCR8B](https://www.ti.com/lit/pdf/slvucr8), sections 4.5 and 5.2:
+
+1. Stage the selected **Low Region Binary** on the nRF52840 before PBMs starts.
+2. Verify PTCH mode, ReadyForPatch bit 81, and idle CMD1. Preserve interrupt
+   masks while enabling PatchLoaded bit 80, then clear any old PatchLoaded event.
+3. Write six DATA1 parameters: uint32 little-endian bundle size, unused patch
+   address (example 0x30), and timeout 0x32 (5 seconds).
+4. Issue PBMs at the fundamental address (example 0x20), wait at least 500 µs,
+   poll CMD1 for completion / !CMD and check PatchStartStatus.
+5. Send the staged raw binary to the patch address without register/length framing.
+6. Issue PBMc at the fundamental address, poll CMD1, read the full 64-byte DATA1
+   response (65 read bytes including its count prefix), check return/patch/config
+   status, and verify PatchLoaded plus MODE APP.
+
+DATA1's 512-bit width is its capacity; it does not require every task to write
+64 bytes. TI permits partial register accesses. PBMs uses six input bytes.
+
+Confirm TPS_ADDR matches the ADCIN-configured address and PATCH_ADDR is unused.
+Use a valid Low Region Binary generated for the target; file contents are not
+repaired or converted. The script refuses APP mode and nonzero completion statuses
+instead of claiming success. These steps and failure paths are tested with a
+protocol model; actual patch acceptance, clock stretching, electrical behavior,
+and CRC results must be tested on the user's TPS25751. No physical loading was
+performed here. To replace a saved older script, click Load example into editor.

@@ -1,12 +1,13 @@
-use crate::i2c_worker::{self, Message, Requests, Responses};
+use crate::i2c_worker::{self, Message, Recycled, Request, Requests, Responses, WriteBuffer};
+use crate::write_upload::{Action, Upload};
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_futures::{
-    join::{join, join4},
+    join::{join, join5},
     select::select,
 };
 use embassy_nrf::buffered_uarte::BufferedUarte;
 use embassy_nrf::gpio::Output;
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel, signal::Signal};
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::I2c;
 use trouble_host::prelude::*;
@@ -44,7 +45,12 @@ pub async fn run<C: Controller, I: I2c>(
     uart: BufferedUarte<'_>,
     address: Address,
     mut connection_led: Output<'_>,
+    mut activity_led: Output<'_>,
+    upload_buffer: WriteBuffer,
 ) {
+    let activity: Signal<NoopRawMutex, ()> = Signal::new();
+    let mut upload = Upload::new(upload_buffer);
+    let recycled = Recycled::new();
     let requests = Requests::new();
     let responses = Responses::new();
     let i2c_busy = AtomicBool::new(false);
@@ -72,13 +78,23 @@ pub async fn run<C: Controller, I: I2c>(
         &mut advertising,
     )
     .unwrap();
-    join4(
+    join5(
+        async {
+            loop {
+                activity.wait().await;
+                activity_led.set_low();
+                Timer::after(Duration::from_millis(15)).await;
+                activity_led.set_high();
+                Timer::after(Duration::from_millis(15)).await;
+            }
+        },
         i2c_worker::run(
             i2c,
             &requests,
             &responses,
             &i2c_busy,
-            || Timer::after(Duration::from_millis(250)),
+            &recycled,
+            |bytes| Timer::after(Duration::from_millis(250 + bytes as u64 / 10)),
             || Timer::after(Duration::from_millis(1)),
         ),
         async {
@@ -130,6 +146,7 @@ pub async fn run<C: Controller, I: I2c>(
                 connection_led.set_low(); // Active-low green LED: connected.
                 defmt::info!("BLE connected: UART enabled, firmware v2");
                 session = session.wrapping_add(1);
+                upload.reset();
                 while queue.try_receive().is_ok() {}
                 overflow.store(false, Ordering::Relaxed);
                 connected.store(true, Ordering::Relaxed);
@@ -143,6 +160,11 @@ pub async fn run<C: Controller, I: I2c>(
                                     let mut malformed = false;
                                     let mut serial_request = None;
                                     if let GattEvent::Write(write) = &event {
+                                        if write.handle() == server.uart.rx.handle
+                                            || write.handle() == server.serial.rx.handle
+                                        {
+                                            activity.signal(());
+                                        }
                                         if write.handle() == server.uart.rx.handle {
                                             write.with_data(|offset, data| {
                                                 if offset == 0 && data.len() == FRAME_SIZE {
@@ -179,6 +201,60 @@ pub async fn run<C: Controller, I: I2c>(
                                         }
                                         continue;
                                     }
+                                    if let Ok(buffer) = recycled.try_receive() {
+                                        upload.restore(buffer);
+                                    }
+                                    let mut prepared: Option<Request> = None;
+                                    if let Some(frame) = request {
+                                        if frame[1] == 1 {
+                                            if i2c_busy.load(Ordering::Relaxed) && frame[2] != 4 {
+                                                if let Ok(reply) =
+                                                    event.reject(AttErrorCode::UNLIKELY_ERROR)
+                                                {
+                                                    reply.send().await;
+                                                }
+                                                continue;
+                                            }
+                                            match upload.ingest(session, &frame) {
+                                                Ok(Action::Continue) => {
+                                                    if let Ok(reply) = event.accept() {
+                                                        reply.send().await;
+                                                    }
+                                                    continue;
+                                                }
+                                                Ok(Action::Staged) => {
+                                                    if let Ok(reply) = event.accept() {
+                                                        reply.send().await;
+                                                    }
+                                                    let mut response = [0u8; FRAME_SIZE];
+                                                    response[0] = frame[0];
+                                                    activity.signal(());
+                                                    let _ = server
+                                                        .uart
+                                                        .tx
+                                                        .notify(&connection, &response, true)
+                                                        .await;
+                                                    continue;
+                                                }
+                                                Ok(Action::Transfer(job)) => prepared = Some(job),
+                                                Err(()) => {
+                                                    if let Ok(reply) = event
+                                                        .reject(AttErrorCode::VALUE_NOT_ALLOWED)
+                                                    {
+                                                        reply.send().await;
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        } else if upload.active() {
+                                            if let Ok(reply) =
+                                                event.reject(AttErrorCode::UNLIKELY_ERROR)
+                                            {
+                                                reply.send().await;
+                                            }
+                                            continue;
+                                        }
+                                    }
                                     // Enqueue all serial bytes before acknowledging the BLE write.
                                     if let Some(frame) = serial_request {
                                         let mut data = &frame[1..1 + frame[0] as usize];
@@ -214,15 +290,19 @@ pub async fn run<C: Controller, I: I2c>(
                                             .is_ok()
                                         {
                                             requests
-                                                .send(Message {
-                                                    session,
-                                                    frame: request,
-                                                })
+                                                .send(prepared.unwrap_or_else(|| {
+                                                    Message {
+                                                        session,
+                                                        frame: request,
+                                                    }
+                                                    .into()
+                                                }))
                                                 .await;
                                         } else {
                                             let mut response = [0; FRAME_SIZE];
                                             response[0] = request[0];
                                             response[1] = 4; // Previous hardware transfer still active.
+                                            activity.signal(());
                                             let _ = server
                                                 .uart
                                                 .tx
@@ -240,6 +320,7 @@ pub async fn run<C: Controller, I: I2c>(
                             loop {
                                 let response = responses.receive().await;
                                 if response.session == session {
+                                    activity.signal(());
                                     let _ = server
                                         .uart
                                         .tx
@@ -254,16 +335,19 @@ pub async fn run<C: Controller, I: I2c>(
                                 if overflow.swap(false, Ordering::Relaxed) {
                                     let mut status = [0; FRAME_SIZE];
                                     status[0] = 1;
+                                    activity.signal(());
                                     let _ =
                                         server.serial.tx.notify(&connection, &status, true).await;
                                 }
                                 // Subscription is independent of the existing I2C notifications.
+                                activity.signal(());
                                 let _ = server.serial.tx.notify(&connection, &frame, true).await;
                             }
                         },
                     ),
                 )
                 .await;
+                upload.reset();
                 connection_led.set_high(); // Off on disconnect, before advertising again.
                 connected.store(false, Ordering::Relaxed);
             }

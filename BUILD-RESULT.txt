@@ -44,3 +44,60 @@ I2C scan and bus tabs update (2026-10-28):
 - Scan uses one-byte read probes and a 14-byte address bitmap over the existing
   service. Green connection LED and existing UART settings remain in the build.
 - Physical bus scanning and hardware timing have not been verified on the board.
+
+Large reads, blue LED and JavaScript file scripts (2026-10-28):
+- cargo build --release --locked --offline: PASSED
+- Firmware host regression tests: 7 PASSED, including 19/32/33/255/256/1024/2047
+  byte reads, preserving all 16 command bytes, one physical I2C transaction,
+  ordered response offsets, final padding, read-only and invalid frame handling.
+- Console Node.js regression tests: 30 PASSED, covering full read assembly,
+  malformed/missing fragments, no partial result, binary reference translation,
+  RPC serialization, Stop waiting for in-flight operations, and worker API errors.
+- Real browser worker tests: 3 PASSED using simulated I2C (reference sequence,
+  64-byte read, terminating an infinite JavaScript loop without freezing the page).
+- Actual console file picker selected a 9-byte local test binary and displayed its
+  name/byte count correctly; reloaded afterward so no test file remains selected.
+- Browser layout checked after correcting a stylesheet overwrite. I2C remains the
+  default tab; scripting section has file picker, editable example, Run/Stop/log.
+- Blue LED P0.06 is active-low, initially off. Separate 15 ms on/off activity loop
+  handles incoming BLE data writes and outgoing I2C/UART responses; fast events
+  coalesce. Physical LED behavior has not been checked.
+- Default script preserves the user-supplied C framing and uses selected file as
+  tps_dummy_patch. TI documentation describes a different actual patch-download
+  flow; the example is labeled as a reference translation, not a verified loader.
+- No physical board flashing, TPS25751 patch load or live large I2C read performed.
+
+JavaScript editor highlighting (2026-10-28):
+- Bundled Prism 1.30.0 core/C-like/JavaScript grammar files and upstream MIT license.
+- Highlighting and scripting regressions: 9 PASSED.
+- Browser verified: 212 tokens highlighted in the default example; typing updates
+  the highlighted mirror without changing raw source. Test edit was restored.
+- Vertical scrolling verified: textarea and mirror both at scrollTop 119.
+- Highlighted layer is hidden from accessibility; the original labeled textarea
+  remains the editable source, including local storage, selection and Tab support.
+- UI-only change; no firmware rebuild or flashing required.
+
+TPS25751 Patch Burst Mode and buffered large writes (2026-10-28):
+- Verified sequence/framing against TI SLVUCR8B sections 4.5/5.2 and SLVAFV8A.
+  DATA1 is 64 bytes in capacity; PBMs has six input bytes and burst payload goes
+  raw to its configured patch address. Previous reference script was replaced.
+- cargo build --release --locked --offline: PASSED
+- Host firmware regressions: 12 PASSED, including 66-byte register write + 65-byte
+  read in one transaction, maximum 32768-byte write, incomplete/invalid upload
+  rejection, no replay, buffer recycling, and retaining DMA memory after timeout.
+- Console regressions: 39 PASSED, including buffered upload/commit/abort,
+  old-firmware rejection, full TI parameter/order model, !CMD/PBMs/CRC/status/
+  PTCH/readiness/APP failures, and existing read/UART/highlight/Stop behavior.
+- Real browser worker checks: 3 PASSED with simulated I2C; corrected TI example,
+  large read, and stopping an infinite loop. UI limits/default script inspected.
+- One static 32 KiB buffer is moved by ownership to the worker; large payloads
+  are not copied through large stack frames. Current static RAM about 65 kB; inspected
+  largest explicit routine stack allocation 6692 bytes (not a full call-depth proof).
+- Stage file before PBMs, then write staged bytes locally to honor the device's
+  five-second timer. Max staged file 32768 bytes, ~3 s nominal wire time at 100 kHz.
+- Physical I2C acceptance, actual bundle CRC/compatibility and timing remain
+  unverified on the user's board. This does not certify successful hardware load.
+- Flash rebuilt firmware, reload console, Load example into editor, select a valid
+  Low Region Binary, and confirm fundamental/patch addresses before running.
+- Final TPS script also enables/clears PatchLoaded bit 80 while preserving other
+  interrupt masks and requires PatchLoaded plus APP mode at completion.

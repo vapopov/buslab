@@ -19,7 +19,7 @@ used as fallbacks if it cannot load.
 2. Click Connect device and choose BLE-I2C-UART-v2. Allow browser/OS Bluetooth access.
 3. Enter the unshifted 7-bit I2C address in hex (08 through 77).
 4. Enter up to 16 hex write bytes, such as A0 01 FF or A001FF.
-5. Choose the read count in decimal (0 through 18).
+5. Choose the read count in decimal (0 through 2047).
 6. Send the transaction; click a response byte to inspect bits b7 through b0.
 
 Empty write data gives a read-only transaction. A read count of zero gives a
@@ -102,3 +102,53 @@ Scanning reads one byte per address; it may consume data or change state on some
 devices and may not find write-only devices. Bus errors/timeouts are shown as scan
 failures rather than an empty result. Scan requests use the existing I2C service,
 so no new Bluetooth service permission or identity is needed for this upgrade.
+
+## Large reads and file scripts
+
+Flash the updated firmware, then reload the console. Read counts now support
+0–2047 bytes. Large reads remain one I2C transaction; 20-byte Bluetooth packets
+are reassembled and checked before data is displayed. Failed or incomplete
+responses are never returned as partial data. The command write limit is now
+32768 bytes, and reads up to 18 bytes remain compatible with older firmware.
+
+In the I2C tab, use **I2C script & binary file** to choose a binary and edit the
+JavaScript example. The file appears as `file` (a Uint8Array) and `fileName`.
+The TPS25751 example uses a valid Low Region Binary selected as `file`. Click Run
+to execute; choosing a file alone sends nothing. The script first buffers the
+binary with `await i2c.stage(file)`, then configures PBMs and calls
+`await i2c.writeStaged(PATCH_ADDR)` to stream it locally. This keeps Bluetooth
+latency outside the device's burst-mode timeout.
+
+Scripts run in a separate worker. Source is saved locally; files remain in memory
+for the current page. Run only scripts you trust. APIs include `await i2c.write`,
+`read`, `writeRead`, `stage`, `writeStaged`, plus `sleep`, `log`, `progress`, `ascii`,
+`text` and `hex`. Normal send/scan controls are locked during scripts; UART RX and
+tabs stay active. Stop aborts buffered data before execution, or waits for an
+in-flight I2C transfer. No write is automatically retried.
+
+Writes up to 32 KiB, including 66-byte framed DATA1 writes, are sent as one I2C
+transaction after BLE reassembly. One staging buffer is shared: short command
+writes may run while a file is staged, but another buffered large write requires
+consuming or replacing that staged file first. Reads support up to 2047 bytes.
+
+The updated default follows TI's documented sequence: PTCH / ReadyForPatch checks,
+six PBMs parameters, CMD1 polling and status checks, raw patch-address data, PBMc
+status and APP verification. Set the fundamental and unused patch addresses for
+your hardware. The DATA1 register is 64 bytes wide but PBMs takes six input bytes.
+Hardware patch loading remains unverified. Reload the page and click **Load example
+into editor** to replace a saved earlier script.
+
+Blue P0.06 activity pulses indicate Bluetooth data packets; rapid packets may
+merge into flicker. Green P0.30 remains the connection indicator.
+
+Run console regressions:
+
+    node --test tests/bridge.test.mjs tests/scripts.test.mjs tests/highlight.test.mjs
+
+For real browser worker tests without hardware, open `tests/script-harness.html`
+through the local server and click Run browser tests. It uses simulated I2C only.
+
+The JavaScript editor includes live syntax highlighting for comments, strings,
+keywords, numbers, functions, templates and regex literals. Prism 1.30.0 is bundled
+locally in `vendor/` with its MIT license, so highlighting works offline. Editing,
+selection, Tab indentation, saved scripts and Run/Stop still use the same textarea.

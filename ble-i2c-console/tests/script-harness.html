@@ -1,0 +1,31 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Script worker integration tests</title>
+<h1>Script worker integration tests · simulated I²C only</h1>
+<button id="run">Run browser tests</button><pre id="output">Ready</pre>
+<script type="module">
+import {ScriptRunner} from '../script-runner.mjs';
+import {REFERENCE_SCRIPT} from '../script-examples.mjs';
+const output=document.getElementById('output');
+const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+document.getElementById('run').onclick=async()=>{
+ document.getElementById('run').disabled=true;output.textContent='Running…';
+ try {
+  const fixture=Uint8Array.from([0,255,2,3,4,5,6,7,128]),logs=[];
+  const {tpsModel}=await import('./tps-model.mjs');
+  const model=tpsModel(fixture);
+  const runner=new ScriptRunner(model.transfer,(kind,value)=>{if(kind==='log')logs.push(value);});
+  await runner.run(REFERENCE_SCRIPT,fixture,'fixture.bin');
+  assert(model.calls[0].action==='stage','binary staged before PBMs');
+  assert(model.calls.some(c=>c.action==='staged'&&c.address===0x30),'raw staged burst to patch address');
+  assert(logs.some(message=>message.includes('APP')),'mode logged');
+  output.textContent='PASS: real worker ran TI Patch Burst Mode sequence against simulated I²C.\n';
+  const reader=new ScriptRunner(async()=>Uint8Array.from({length:64},(_,i)=>i),(_,v)=>logs.push(v));
+  await reader.run('const b = await i2c.writeRead(0x20,[9],64); if(b.length!==64 || b[63]!==63)throw new Error("bad read"); log("64-byte read OK");');
+  output.textContent+='PASS: real worker returns a 64-byte response.\n';
+  const loop=new ScriptRunner(async()=>new Uint8Array());
+  const stopped=loop.run('while (true) {}');
+  setTimeout(()=>loop.stop(),100);
+  try{await stopped;throw new Error('loop was not stopped');}catch(e){assert(e.message.includes('Script stopped'),'loop stop result');}
+  output.textContent+='PASS: Stop terminates a tight loop; browser remains responsive.\nALL 3 BROWSER TESTS PASSED';
+ }catch(e){output.textContent+='\nFAIL: '+e.message;}finally{document.getElementById('run').disabled=false;}
+};
+</script></html>

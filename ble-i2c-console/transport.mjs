@@ -1,4 +1,4 @@
-import { SERVICE, RX, TX, decodeResponse, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart } from './protocol.mjs';
+import { SERVICE, RX, TX, ResponseAssembler, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart } from './protocol.mjs';
 export class Bridge {
   constructor(bluetooth, emit = () => {}) {
     this.bluetooth = bluetooth; this.emit = emit; this.device = null; this.rx = null; this.tx = null; this.pending = null; this.tainted = false;
@@ -54,27 +54,58 @@ export class Bridge {
     const view = event.target.value;
     const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice();
     if (!this.pending || bytes[0] !== this.pending.request.id) { this.emit('unexpected', bytes); return; }
-    try { this.pending.resolve(decodeResponse(bytes, this.pending.request)); }
-    catch (e) { this.pending.reject(e); }
+    if (this.pending.completed) { this.emit('unexpected', bytes); return; }
+    try {
+      if (this.pending.aborting) {
+        if (bytes.length !== 20 || bytes[1] !== 0) throw new Error('Upload abort was not acknowledged. Reconnect before continuing.');
+        this.pending.completed = true; this.pending.resolve({status:0,data:new Uint8Array()}); return;
+      }
+      const result = this.pending.assembler.push(bytes);
+      this.emit('i2c-packet', {received: this.pending.assembler.offset, total: this.pending.request.readLength});
+      if (result) { this.pending.completed = true; this.pending.resolve(result); }
+    } catch (e) { this.pending.completed = true; this.pending.reject(e); }
   }
-  async transact(request, timeoutMs = 5000) {
+  async transact(request, timeoutMs = request.extended || request.upload || request.type === 'staged' ? 15000 : 5000) {
     if (!this.connected) throw new Error('Connect to BLE-I2C first.');
     if (this.pending || this.uartBusy) throw new Error('Wait for the current transaction to finish.');
     if (this.tainted) throw new Error('Reconnect before sending another command. The previous transaction did not complete.');
-    let timer;
+    let timer, pending;
     const start = performance.now();
+    const armTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        pending.completed = true;
+        pending.reject(new Error(`No response after ${timeoutMs / 1000} seconds. The write may already have executed. Reconnect before continuing.`));
+      }, timeoutMs);
+    };
     const response = new Promise((resolve, reject) => {
-      this.pending = { request, resolve, reject };
-      timer = setTimeout(() => reject(new Error('No response after 5 seconds. The write may already have executed. Reconnect before continuing.')), timeoutMs);
+      pending = {request, resolve, reject, assembler: new ResponseAssembler(request), completed: false, cancelUpload: false};
+      this.pending = pending; armTimer();
     });
+    const rx = this.rx;
+    const send = async () => {
+      const frames = request.frames || [request.frame];
+      for (let index = 0; index < frames.length; index++) {
+        if (pending.completed) break;
+        if (pending.cancelUpload && request.upload) {
+          pending.aborting = true;
+          const abort = new Uint8Array(20); abort.set([request.id, 1, 4]);
+          await rx.writeValueWithResponse(abort);
+          const error = new Error('Upload stopped before I²C execution.'); error.uploadAborted = true; throw error;
+        }
+        await rx.writeValueWithResponse(frames[index]);
+        if (!pending.completed) armTimer();
+        if (request.upload) this.emit('upload-progress', {sent: Math.min(request.data.length, index * 15), total: request.data.length});
+      }
+    };
     try {
-      // Install notification handler/pending request before sending, and handle
-      // both promises immediately: a notification can precede the write ACK.
-      const [, result] = await Promise.all([this.rx.writeValueWithResponse(request.frame), response]);
-      return { ...result, elapsed: performance.now() - start };
-    } catch (e) { this.tainted = true; throw e; }
+      const [, result] = await Promise.all([send(), response]);
+      return {...result, elapsed: performance.now() - start};
+    } catch (e) { pending.completed = true; if (!e.uploadAborted) this.tainted = true; throw e; }
     finally { clearTimeout(timer); this.pending = null; }
   }
+  cancelPendingUpload() { if (this.pending?.request.upload) this.pending.cancelUpload = true; }
+
   async sendUart(bytes) {
     if (!this.connected || !this.uartRx) throw new Error('UART unavailable. Flash the updated firmware and reconnect.');
     if (this.uartBusy || this.pending) throw new Error('Wait for the current send to finish.');
@@ -87,7 +118,7 @@ export class Bridge {
   onDisconnect() {
     if (this.uartTx) this.uartTx.removeEventListener('characteristicvaluechanged', this.onUartNotification);
     this.uartRx = null; this.uartTx = null;
-    this.pending?.reject(new Error('Device disconnected. The write may already have executed.'));
+    if (this.pending) { this.pending.completed = true; this.pending.reject(new Error('Device disconnected. The write may already have executed.')); }
     this.rx = null;
     if (this.tx) this.tx.removeEventListener('characteristicvaluechanged', this.onNotification);
     this.tx = null;

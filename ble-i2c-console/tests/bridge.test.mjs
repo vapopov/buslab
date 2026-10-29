@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseHex, makeRequest, decodeResponse, SERVICE, RX, TX, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart, makeScanRequest, scanAddresses } from '../protocol.mjs';
+import { parseHex, makeRequest, decodeResponse, SERVICE, RX, TX, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart, makeScanRequest, scanAddresses, ResponseAssembler, makeBinaryRequest, makeStageRequest, makeStagedWriteRequest, MAX_WRITE } from '../protocol.mjs';
 import { Bridge } from '../transport.mjs';
 
 test('hex input accepts separated, compact and prefixed bytes', () => {
   for (const input of ['A0 01 FF', 'A001FF', '0xA0, 0x01, 0xFF']) assert.deepEqual([...parseHex(input)], [160,1,255]);
-  for (const input of ['A', 'GG', '0x', 'AA-01', 'AA '.repeat(17)]) assert.throws(() => parseHex(input));
+  for (const input of ['A', 'GG', '0x', 'AA-01', 'AA '.repeat(MAX_WRITE+1)]) assert.throws(() => parseHex(input));
 });
 test('exact firmware frame with zero padding and combined read', () => {
   const request = makeRequest(257, '0x50', '10 A0', '18');
@@ -15,7 +15,7 @@ test('exact firmware frame with zero padding and combined read', () => {
 test('read-only/write-only and bounds', () => {
   assert.equal(makeRequest(1, '08', '', '1').data.length,0);
   assert.equal(makeRequest(1, '77', '00', '0').readLength,0);
-  for (const args of [['07','AA','1'],['78','AA','1'],['50','','0'],['50','AA','19'],['50','AA','1.5'],['50','AA','-1']]) assert.throws(() => makeRequest(1,...args));
+  for (const args of [['07','AA','1'],['78','AA','1'],['50','','0'],['50','AA','2048'],['50','AA','1.5'],['50','AA','-1']]) assert.throws(() => makeRequest(1,...args));
 });
 test('decode strips headers and padding, checks frame and status', () => {
   const req = makeRequest(5,'50','10','2');
@@ -182,4 +182,96 @@ test('scan uses existing transaction channel and leaves normal transactions usab
   assert.deepEqual(scanAddresses(await bridge.transact(makeScanRequest(1))),[0x50]);
   assert.equal((await bridge.transact(makeRequest(2,'50','10','1'))).data[0],1);
   bridge.disconnect();
+});
+
+function extendedPackets(id, data) {
+  const frames = [];
+  function frame(kind, value, payload = []) { const b = new Uint8Array(20); b.set([id,kind,value & 255,value >> 8]); b.set(payload,4); return b; }
+  frames.push(frame(0x80,data.length));
+  for(let offset=0;offset<data.length;offset+=16) frames.push(frame(0x81,offset,data.slice(offset,offset+16)));
+  frames.push(frame(0x82,data.length)); return frames;
+}
+test('extended requests encode bounds without losing any of the 16 command bytes', () => {
+  for(const size of [19,255,256,1024,2047]) {
+    const command=Uint8Array.from({length:16},(_,i)=>i+1);
+    const req=makeBinaryRequest(1,0x50,command,size);
+    assert.equal(req.frame[1],0xD0); assert.equal(req.frame[2]&31,16);
+    assert.equal(((req.frame[2]>>5)<<8)|req.frame[3],size);
+    assert.deepEqual(req.frame.slice(4),command);
+  }
+  for(const bytes of [[-1],[256],[1.5],new Array(MAX_WRITE+1).fill(1)]) assert.throws(()=>makeBinaryRequest(1,0x20,bytes,0));
+  assert.throws(()=>makeBinaryRequest(1,0x20,[],2048));
+});
+test('large response assembles binary bytes at packet boundaries and maximum length', () => {
+  for(const length of [19,32,33,255,256,2047]) {
+    const data=Uint8Array.from({length},(_,i)=>(i*29)&255);
+    const assembler=new ResponseAssembler(makeBinaryRequest(7,0x20,[3],length));
+    const frames=extendedPackets(7,data);
+    for(const frame of frames.slice(0,-1)) assert.equal(assembler.push(frame),null);
+    assert.deepEqual(assembler.push(frames.at(-1)).data,data);
+  }
+});
+test('missing, duplicate, out-of-order and truncated fragments never succeed', () => {
+  const data=new Uint8Array(40), frames=extendedPackets(1,data);
+  const make=()=>new ResponseAssembler(makeBinaryRequest(1,0x20,[3],40));
+  let a=make(); assert.throws(()=>a.push(frames[1]));
+  a=make(); a.push(frames[0]); assert.throws(()=>a.push(frames[0]));
+  a=make(); a.push(frames[0]); assert.throws(()=>a.push(frames[2]));
+  a=make(); a.push(frames[0]); a.push(frames[1]); assert.throws(()=>a.push(frames[1]));
+  a=make(); a.push(frames[0]); a.push(frames[1]); assert.throws(()=>a.push(frames.at(-1)));
+  a=make(); const bad=frames[0].slice(); bad[2]=39; assert.throws(()=>a.push(bad));
+});
+test('fragmented BLE transaction waits for end marker and does not repeat I2C command', async () => {
+  let writes=0;
+  const data=Uint8Array.from({length:100},(_,i)=>i);
+  const {bridge}=setup(async(frame,tx)=>{writes++;for(const packet of extendedPackets(frame[0],data))tx.notify(packet);});
+  await bridge.connect();
+  assert.deepEqual((await bridge.transact(makeBinaryRequest(1,0x20,[9],100))).data,data);
+  assert.equal(writes,1); bridge.disconnect();
+});
+test('fragment loss times out, taints connection and never returns partial bytes', async () => {
+  const {bridge}=setup(async(frame,tx)=>{const frames=extendedPackets(frame[0],new Uint8Array(40));tx.notify(frames[0]);tx.notify(frames[1]);});
+  await bridge.connect();
+  await assert.rejects(bridge.transact(makeBinaryRequest(1,0x20,[9],40),10),/No response/);
+  assert.equal(bridge.tainted,true); bridge.disconnect();
+});
+
+test('64 payload bytes plus TPS register framing become one buffered I2C request', () => {
+  const bytes=Uint8Array.from([9,64,...Array.from({length:64},(_,i)=>i)]);
+  const request=makeBinaryRequest(3,0x20,bytes,65);
+  assert.equal(request.upload,true);assert.equal(request.extended,true);
+  assert.deepEqual([...request.frames[0].slice(0,9)],[3,1,0,0x20,66,0,65,0,0]);
+  const data=request.frames.slice(1,-1).flatMap((f,index)=>{assert.equal(f[3]|f[4]<<8,index*15);return [...f.slice(5,5+Math.min(15,66-index*15))];});
+  assert.deepEqual(data,[...bytes]);assert.deepEqual([...request.frame.slice(0,3)],[3,1,2]);
+});
+test('staging and commit commands separate file upload from physical I2C execution', () => {
+  const stage=makeStageRequest(1,new Uint8Array(11392));
+  assert.deepEqual([...stage.frames[0].slice(0,9)],[1,1,0,0,128,44,0,0,1]);
+  assert.equal(stage.data.length,11392);assert.equal(stage.extended,false);
+  assert.deepEqual([...makeStagedWriteRequest(2,0x30).frame.slice(0,4)],[2,1,3,0x30]);
+  assert.throws(()=>makeStageRequest(1,new Uint8Array(MAX_WRITE+1)));
+});
+test('buffered transfer sends all BLE frames but awaits only the committed I2C result', async()=>{
+  const writes=[];
+  const {bridge}=setup(async(frame,tx)=>{writes.push(frame.slice());if(frame[1]===1&&frame[2]===2)tx.notify(Uint8Array.from([frame[0],0,...Array(18).fill(0)]));});
+  await bridge.connect();const request=makeBinaryRequest(1,0x20,new Uint8Array(66),0);
+  assert.equal((await bridge.transact(request)).status,0);assert.equal(writes.length,request.frames.length);bridge.disconnect();
+});
+test('upload rejected by old firmware stops immediately before remaining fragments',async()=>{
+  let writes=0;const {bridge}=setup(async(frame,tx)=>{writes++;tx.notify(Uint8Array.from([frame[0],1,...Array(18).fill(0)]));});
+  await bridge.connect();const result=await bridge.transact(makeStageRequest(1,new Uint8Array(66)));
+  assert.equal(writes,1);assert.match(result.message,/updated firmware/);bridge.disconnect();
+});
+test('cancelled buffering sends abort instead of commit and does not taint connection',async()=>{
+  const writes=[];let bridge;
+  ({bridge}=setup(async(frame,tx)=>{writes.push(frame[2]);if(frame[2]===1)bridge.cancelPendingUpload();if(frame[2]===4)tx.notify(Uint8Array.from([frame[0],0,...Array(18).fill(0)]));}));
+  await bridge.connect();await assert.rejects(bridge.transact(makeStageRequest(1,new Uint8Array(66))),/Upload stopped/);
+  assert.deepEqual(writes,[0,1,4]);assert.equal(bridge.tainted,false);bridge.disconnect();
+});
+
+test('aborting a buffered write/read discards expected read fragments without tainting',async()=>{
+  let bridge;const ops=[];
+  ({bridge}=setup(async(frame,tx)=>{ops.push(frame[2]);if(frame[2]===1)bridge.cancelPendingUpload();if(frame[2]===4)tx.notify(Uint8Array.from([frame[0],0,...Array(18).fill(0)]));}));
+  await bridge.connect();await assert.rejects(bridge.transact(makeBinaryRequest(1,0x20,new Uint8Array(66),65)),/Upload stopped/);
+  assert.deepEqual(ops,[0,1,4]);assert.equal(bridge.tainted,false);bridge.disconnect();
 });

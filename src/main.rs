@@ -13,6 +13,7 @@ use static_cell::StaticCell;
 
 mod bridge;
 mod i2c_worker;
+mod write_upload;
 
 bind_interrupts!(struct Irqs {
     EGU0_SWI0 => mpsl::LowPrioInterruptHandler;
@@ -38,6 +39,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_nrf::init(config);
     // XIAO's onboard green LED is active-low: start off while advertising.
     let connection_led = Output::new(p.P0_30, Level::High, OutputDrive::Standard);
+    let activity_led = Output::new(p.P0_06, Level::High, OutputDrive::Standard);
 
     interrupt::typelevel::UARTE0::set_priority(interrupt::Priority::P6);
     interrupt::typelevel::RNG::set_priority(interrupt::Priority::P6);
@@ -107,5 +109,16 @@ async fn main(spawner: Spawner) {
     // Changed for the v2 GATT layout so hosts rediscover the added UART service.
     // A fixed example address; assign a unique static-random address per unit.
     let address = trouble_host::prelude::Address::random([2, 2, 3, 4, 5, 0xC0]);
-    bridge::run(controller, i2c, uart, address, connection_led).await;
+    static UPLOAD_BUFFER: StaticCell<[u8; i2c_worker::MAX_WRITE]> = StaticCell::new();
+    let upload_buffer = UPLOAD_BUFFER.init_with(|| [0; i2c_worker::MAX_WRITE]);
+    bridge::run(
+        controller,
+        i2c,
+        uart,
+        address,
+        connection_led,
+        activity_led,
+        upload_buffer,
+    )
+    .await;
 }
