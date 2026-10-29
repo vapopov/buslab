@@ -1,8 +1,12 @@
 # BLE I²C + UART Console
 
+**[Open the web client](https://buslab.let.run)** to try **Explore a sample** without hardware, or connect your board over Bluetooth.
+
+See [SPECS.md](../SPECS.md) for the firmware protocol.
+
 ## Run locally
 
-Extract this ZIP, open a terminal in the ble-i2c-console directory, then run:
+Open a terminal in the ble-i2c-console directory, then run:
 
     python3 -m http.server 8000 --bind 127.0.0.1
 
@@ -18,7 +22,7 @@ used as fallbacks if it cannot load.
 1. Disconnect the phone's nRF Connect session (firmware allows one connection).
 2. Click Connect device and choose BLE-I2C-UART-v2. Allow browser/OS Bluetooth access.
 3. Enter the unshifted 7-bit I2C address in hex (08 through 77).
-4. Enter up to 16 hex write bytes, such as A0 01 FF or A001FF.
+4. Enter up to 32768 hex write bytes, such as A0 01 FF or A001FF.
 5. Choose the read count in decimal (0 through 2047).
 6. Send the transaction; click a response byte to inspect bits b7 through b0.
 
@@ -57,7 +61,7 @@ Flash the updated firmware, then reconnect. UART is on XIAO D6 / P1.11 (TX)
 and D7 / P1.12 (RX), fixed 115200 baud, 8-N-1, no flow control. Connect TX to
 target RX, RX to target TX, and ground to ground, using compatible 3.3 V logic.
 
-Use the UART terminal below the I2C workbench. Choose UTF-8 text or hex bytes;
+Use the UART tab beside the I2C workbench. Choose UTF-8 text or hex bytes;
 text can append no ending, LF, or CRLF. RX streams automatically and shows both
 hex and decoded text. The bounded log retains its latest 64000 characters.
 Sending is split into acknowledged BLE writes; a queued confirmation does not

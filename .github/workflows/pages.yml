@@ -1,0 +1,52 @@
+name: Deploy web console to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ble-i2c-console/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test web console
+        run: node --test ble-i2c-console/tests/*.test.mjs
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Prepare static client
+        run: |
+          mkdir _site
+          cp ble-i2c-console/index.html ble-i2c-console/style.css ble-i2c-console/app.js ble-i2c-console/*.mjs ble-i2c-console/CNAME ble-i2c-console/.nojekyll _site/
+          cp -R ble-i2c-console/vendor _site/vendor
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
