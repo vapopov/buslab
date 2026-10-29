@@ -54,6 +54,12 @@ Optional SWD launch with probe-rs installed:
 cargo run --release --locked
 ```
 
+## Connection indicator
+
+The onboard green LED (P0.30) is off at startup and while advertising, on while
+Bluetooth is connected, and off again after disconnection is detected. The LED
+is active-low (LOW = on, HIGH = off).
+
 ## BLE protocol
 
 Advertised name: BLE-I2C-UART-v2. Connect with a BLE client; this is not a Bluetooth

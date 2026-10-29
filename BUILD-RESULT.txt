@@ -26,3 +26,10 @@ Firmware output: target/thumbv7em-none-eabihf/release/embassy-nrf-i2c-bridge
 No physical board flashing, BLE connection, UART loopback or I2C hardware test
 was performed. Cached-service diagnosis remains a hypothesis until verified on
 the user's host and board. This build uses a new identity to avoid the old cache.
+
+Connection LED update (2026-10-28):
+- P0.30 initialized HIGH (off), LOW after BLE connection setup, HIGH when the
+  connection loop exits before restarting advertising.
+- cargo build --release --locked --offline: PASSED
+- cargo fmt --check: PASSED
+- Physical LED behavior has not been verified on the board.

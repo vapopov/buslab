@@ -3,6 +3,7 @@
 
 use defmt_rtt as _;
 use embassy_executor::Spawner;
+use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::interrupt::typelevel::Interrupt as _;
 use embassy_nrf::{bind_interrupts, buffered_uarte, interrupt, peripherals, rng, twim, uarte};
 use nrf_mpsl::{self as mpsl, MultiprotocolServiceLayer};
@@ -35,6 +36,8 @@ async fn main(spawner: Spawner) {
     // Keep application interrupts below MPSL's reserved high-priority interrupts.
     config.time_interrupt_priority = interrupt::Priority::P6;
     let p = embassy_nrf::init(config);
+    // XIAO's onboard green LED is active-low: start off while advertising.
+    let connection_led = Output::new(p.P0_30, Level::High, OutputDrive::Standard);
 
     interrupt::typelevel::UARTE0::set_priority(interrupt::Priority::P6);
     interrupt::typelevel::RNG::set_priority(interrupt::Priority::P6);
@@ -104,5 +107,5 @@ async fn main(spawner: Spawner) {
     // Changed for the v2 GATT layout so hosts rediscover the added UART service.
     // A fixed example address; assign a unique static-random address per unit.
     let address = trouble_host::prelude::Address::random([2, 2, 3, 4, 5, 0xC0]);
-    bridge::run(controller, i2c, uart, address).await;
+    bridge::run(controller, i2c, uart, address, connection_led).await;
 }

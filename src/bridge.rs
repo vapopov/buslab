@@ -5,6 +5,7 @@ use embassy_futures::{
     select::select,
 };
 use embassy_nrf::buffered_uarte::BufferedUarte;
+use embassy_nrf::gpio::Output;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::I2c;
@@ -42,6 +43,7 @@ pub async fn run<C: Controller, I: I2c>(
     i2c: I,
     uart: BufferedUarte<'_>,
     address: Address,
+    mut connection_led: Output<'_>,
 ) {
     let requests = Requests::new();
     let responses = Responses::new();
@@ -120,6 +122,7 @@ pub async fn run<C: Controller, I: I2c>(
                     Ok(c) => c,
                     Err(_) => continue,
                 };
+                connection_led.set_low(); // Active-low green LED: connected.
                 defmt::info!("BLE connected: UART enabled, firmware v2");
                 session = session.wrapping_add(1);
                 while queue.try_receive().is_ok() {}
@@ -256,6 +259,7 @@ pub async fn run<C: Controller, I: I2c>(
                     ),
                 )
                 .await;
+                connection_led.set_high(); // Off on disconnect, before advertising again.
                 connected.store(false, Ordering::Relaxed);
             }
         },
