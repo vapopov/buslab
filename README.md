@@ -1,8 +1,8 @@
+
+
 # buslab — wireless I²C & serial workbench
 
-![Web client showing an I²C transaction, sample response bytes, and the bit inspector](docs/images/web-client.jpg)
-
-*Actual client UI in “Explore a sample” mode; the displayed bytes are demo data.*
+https://github.com/user-attachments/assets/53db78b7-d3a2-450a-b99e-5d2d96376190
 
 **[Open the web client at buslab.let.run](https://buslab.let.run)** — try **Explore a sample** without hardware, or connect your board to work with your own devices.
 
