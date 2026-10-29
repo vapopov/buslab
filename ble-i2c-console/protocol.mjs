@@ -54,3 +54,16 @@ export function decodeUart(bytes) {
   if (bytes.length !== 20 || bytes[0] > 1 || bytes[1] > 18 || (bytes[0] === 1 && bytes[1] !== 0)) throw new Error('Invalid UART notification.');
   return { overflow: bytes[0] === 1, data: bytes.slice(2, 2 + bytes[1]) };
 }
+
+export function makeScanRequest(id) {
+  const frame = new Uint8Array(20);
+  frame.set([id & 255, 0, 0xFF, 0]);
+  return {id: id & 255, type: 'scan', readLength: 14, frame};
+}
+export function scanAddresses(result) {
+  if (result.status !== 0) throw new Error(result.status === 1 ? 'Scanning requires the latest firmware. Flash the updated firmware and reconnect.' : result.message);
+  if (result.data.length !== 14) throw new Error('Invalid scan result: expected a 14-byte address bitmap.');
+  const addresses = [];
+  for (let bit = 0; bit < 112; bit++) if (result.data[bit >> 3] & (1 << (bit & 7))) addresses.push(0x08 + bit);
+  return addresses;
+}

@@ -9,3 +9,13 @@ select { font: inherit; padding: 12px; border: 1px solid #d7dce3; border-radius:
 .uart-card .section-heading { gap: 12px; flex-wrap: wrap; }
 .uart-card .section-heading > .subtle { white-space: normal; }
 #uart-form .button { margin: 0 8px 8px 0; }
+
+.bus-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border); margin: 0 0 24px; }
+.bus-tabs [role="tab"] { padding: 13px 26px; background: transparent; color: var(--muted); border: 0; border-bottom: 3px solid transparent; font-weight: 600; }
+.bus-tabs [aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.scan-card { margin-bottom: 24px; }
+.scan-card .section-heading { gap: 12px; flex-wrap: wrap; }
+.scan-body { padding: 0 24px 16px; }
+.scan-body > p { line-height: 1.7; }
+.scan-results { display: flex; flex-wrap: wrap; gap: 8px; }
+#panel-uart .uart-card { margin-top: 0; }

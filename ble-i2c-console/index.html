@@ -6,6 +6,16 @@
 <div class="heading"><div><div class="eyebrow">YOUR WIRELESS WORKBENCH</div><h1>BLE I²C + UART Console<span class="title-dot">.</span></h1><p>Send bytes. Read registers. See every bit.</p></div><button id="sample" class="button secondary">Explore a sample <span>↗</span></button></div>
 <div id="compatibility" class="notice" hidden></div>
 <section class="connection card" aria-label="Bluetooth connection"><div class="device-icon">ᛒ</div><div class="connection-info"><div class="connection-title">nRF52840 <span class="chip">Nordic UART</span></div><div id="connection-description">Connect to your BLE-I2C bridge to get started.</div></div><div class="connection-actions"><span id="connection-status" class="status"><i></i>Disconnected</span><button id="connect" class="button primary">Connect device <span>＋</span></button><button id="disconnect" class="button secondary" hidden>Disconnect</button></div></section>
+<div class="bus-tabs" role="tablist" aria-label="Bus console">
+<button id="tab-i2c" role="tab" aria-selected="true" aria-controls="panel-i2c" tabindex="0">I²C</button>
+<button id="tab-uart" role="tab" aria-selected="false" aria-controls="panel-uart" tabindex="-1">UART</button>
+</div>
+<div id="panel-i2c" role="tabpanel" aria-labelledby="tab-i2c">
+<section class="card scan-card" aria-label="I²C bus scan">
+<div class="section-heading"><div><h2>Discover I²C devices</h2></div><button id="scan" class="button secondary" disabled>Scan I²C bus</button></div>
+<div class="scan-body"><p id="scan-status" role="status">Scan addresses 0x08–0x77, then select a responding address.</p><div id="scan-results" class="scan-results" aria-label="Responding I²C addresses"></div>
+<p class="subtle">Uses one-byte reads. Probing may consume data or change state on some devices. Scan only when appropriate for your target.</p></div>
+</section>
 <div class="workspace">
 <section class="card command-card"><div class="section-heading"><div><span class="section-number">01</span><h2>Transaction</h2></div><span class="subtle mono">I²C MASTER</span></div>
 <form id="command-form" novalidate>
@@ -22,6 +32,9 @@
 <section class="card response-card"><div class="section-heading"><div><span class="section-number">02</span><h2>Response</h2></div><span id="response-badge" class="subtle">Awaiting transaction</span></div><div id="response-content" class="response-content"><div class="empty-state"><div class="empty-icon">[ · · ]</div><h3>Bytes will land here</h3><p>Connect and send a transaction.<br>Click any returned byte to inspect its bits.</p></div></div></section>
 <section class="card inspector-card"><div class="section-heading"><div><span class="section-number">03</span><h2>Bit inspector</h2></div><span class="subtle mono">MSB → LSB</span></div><div id="inspector" class="inspector-empty"><span class="inspector-placeholder">Select a response byte</span><p>A closer look, one bit at a time.</p></div></section>
 </div></div>
+<section class="card history-card"><div class="section-heading"><div><span class="history-icon">↳</span><h2>Activity</h2><span id="history-count" class="count">0</span></div><button id="clear" class="text-button">Clear activity</button></div><div id="history" class="history"><div class="history-empty">Your session’s transactions will appear here.</div></div></section>
+</div>
+<div id="panel-uart" role="tabpanel" aria-labelledby="tab-uart" hidden>
 <section class="card history-card uart-card" aria-label="UART console">
 <div class="section-heading"><div><h2>UART terminal</h2></div><span class="subtle mono">115200 · 8-N-1 · TX P1.11 / RX P1.12</span></div>
 <p id="uart-status">Connect to check UART availability.</p>
@@ -33,7 +46,7 @@
 <pre id="uart-log" class="uart-log" aria-label="UART receive and transmit log"></pre>
 <p class="subtle">Live RX shows hex and decoded text. Keep the connection open to receive data. A send confirmation means bytes were queued; it does not confirm a reply from the target.</p>
 </section>
-<section class="card history-card"><div class="section-heading"><div><span class="history-icon">↳</span><h2>Activity</h2><span id="history-count" class="count">0</span></div><button id="clear" class="text-button">Clear activity</button></div><div id="history" class="history"><div class="history-empty">Your session’s transactions will appear here.</div></div></section>
+</div>
 <footer><span><span class="footer-dot"></span> Built for BLE-I2C on nRF52840</span><span>16 bytes write <span class="separator">/</span> 18 bytes read <span class="separator">/</span> 100 kHz bus</span></footer>
 </main><div id="toast" class="toast" role="status" hidden></div>
 </body></html>

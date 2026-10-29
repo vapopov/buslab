@@ -179,3 +179,27 @@ cargo test --manifest-path firmware-tests/Cargo.toml --target aarch64-apple-darw
 Replace the target with your host triple on another platform. Tests cover a NACK
 from an absent target, deadline expiry without DMA cancellation, retaining busy
 state until hardware completes, discarding late results, and subsequent recovery.
+
+## I2C bus scanning
+
+The console opens on the I2C tab. UART has its own tab; switching tabs preserves
+both panels and keeps UART notifications active in the background. The Bluetooth
+connection controls are shared. Tabs support arrow keys, Home and End.
+
+Click **Scan I2C bus** to probe the unshifted addresses 0x08 through 0x77. Responding
+addresses appear as buttons; selecting one fills the transaction address field.
+The scan uses one-byte reads, not register writes or an address-only probe. Reads
+can consume FIFO data, advance pointers, or affect some devices; only scan when
+appropriate for the attached devices. Write-only devices may not respond.
+
+Dedicated scan request: exactly 20 bytes, `[id, 0x00, 0xFF, 0x00, zero_padding...]`.
+Older firmware rejects it with status 1. The success response remains exactly
+20 bytes: `[id, 0, bitmap (14 bytes), zero_padding (4 bytes)]`. Bit 0 of bitmap
+byte 0 corresponds to address 0x08, bit 7 to 0x0F, and so on through 0x77.
+Only a complete successful scan should be displayed as an address list.
+Address NACKs mean no response; other bus errors abort with status 2. A stuck
+scan reports status 3 after the existing 250 ms deadline and retains ownership
+of its in-flight DMA buffers, while Bluetooth/UART continue operating.
+
+A 1 ms pause between probes gives the driver's requested STOP time to finish
+before another START and yields to BLE processing. No scan retries are performed.

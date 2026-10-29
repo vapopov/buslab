@@ -33,3 +33,14 @@ Connection LED update (2026-10-28):
 - cargo build --release --locked --offline: PASSED
 - cargo fmt --check: PASSED
 - Physical LED behavior has not been verified on the board.
+
+I2C scan and bus tabs update (2026-10-28):
+- cargo build --release --locked --offline: PASSED
+- Firmware host regression tests: 5 PASSED (includes scan range, bitmap mapping,
+  no payload writes, empty bus, bus fault abort, existing timeout/recovery checks).
+- Console Node.js regression tests: 19 PASSED.
+- Browser checked: I2C selected by default; UART tab hides I2C; arrow-key switching
+  restores I2C; scan button disabled while disconnected. Screenshot saved.
+- Scan uses one-byte read probes and a 14-byte address bitmap over the existing
+  service. Green connection LED and existing UART settings remain in the build.
+- Physical bus scanning and hardware timing have not been verified on the board.

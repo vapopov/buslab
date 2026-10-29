@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseHex, makeRequest, decodeResponse, SERVICE, RX, TX, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart } from '../protocol.mjs';
+import { parseHex, makeRequest, decodeResponse, SERVICE, RX, TX, UART_SERVICE, UART_RX, UART_TX, uartFrames, decodeUart, makeScanRequest, scanAddresses } from '../protocol.mjs';
 import { Bridge } from '../transport.mjs';
 
 test('hex input accepts separated, compact and prefixed bytes', () => {
@@ -160,5 +160,26 @@ test('I2C firmware timeout and bus-busy replies do not taint transport or block 
   status = 4; const busy = await bridge.transact(makeRequest(2,'50','10','2'));
   assert.equal(busy.status,4); assert.match(busy.message,/still busy/);
   status = 0; assert.equal((await bridge.transact(makeRequest(3,'50','10','2'))).status,0);
+  bridge.disconnect();
+});
+
+test('scan request has dedicated command and decodes 112-bit address bitmap', () => {
+  const request=makeScanRequest(258);
+  assert.deepEqual([...request.frame],[2,0,255,0,...Array(16).fill(0)]);
+  const frame=new Uint8Array(20); frame[0]=2; frame[2]=0x81; frame[3]=1; frame[11]=1; frame[15]=0x80;
+  assert.deepEqual(scanAddresses(decodeResponse(frame,request)),[0x08,0x0F,0x10,0x50,0x77]);
+  frame.fill(0,2); assert.deepEqual(scanAddresses(decodeResponse(frame,request)),[]);
+  frame[1]=1; assert.throws(()=>scanAddresses(decodeResponse(frame,request)),/latest firmware/);
+  for(const status of [2,3,4]) {frame[1]=status; assert.throws(()=>scanAddresses(decodeResponse(frame,request)));}
+  assert.throws(()=>scanAddresses({status:0,data:new Uint8Array(13)}),/bitmap/);
+});
+test('scan uses existing transaction channel and leaves normal transactions usable', async () => {
+  const {bridge}=setup(async (frame,tx)=>{
+    const response=new Uint8Array(20); response[0]=frame[0];
+    response[frame[1]===0 ? 11 : 2]=1; tx.notify(response);
+  });
+  await bridge.connect();
+  assert.deepEqual(scanAddresses(await bridge.transact(makeScanRequest(1))),[0x50]);
+  assert.equal((await bridge.transact(makeRequest(2,'50','10','1'))).data[0],1);
   bridge.disconnect();
 });

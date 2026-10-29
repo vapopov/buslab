@@ -73,9 +73,14 @@ pub async fn run<C: Controller, I: I2c>(
     )
     .unwrap();
     join4(
-        i2c_worker::run(i2c, &requests, &responses, &i2c_busy, || {
-            Timer::after(Duration::from_millis(250))
-        }),
+        i2c_worker::run(
+            i2c,
+            &requests,
+            &responses,
+            &i2c_busy,
+            || Timer::after(Duration::from_millis(250)),
+            || Timer::after(Duration::from_millis(1)),
+        ),
         async {
             // Always drain the physical UART, including while disconnected.
             loop {

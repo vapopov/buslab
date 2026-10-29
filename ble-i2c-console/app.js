@@ -1,9 +1,10 @@
-import { hex, parseHex, makeRequest } from './protocol.mjs';
+import { hex, parseHex, makeRequest, makeScanRequest, scanAddresses } from './protocol.mjs';
 import { Bridge } from './transport.mjs';
 const $ = id => document.getElementById(id);
 let busy = false, connecting = false, nextId = 1, selected = 0, current = null, history = [];
 let toastTimer;
-let uartSending = false;
+let uartSending = false, scanning = false;
+let activeTab = 'i2c';
 const uartDecoder = new TextDecoder();
 function uartLog(text) {
   const log = $('uart-log');
@@ -21,7 +22,7 @@ const bridge = new Bridge(navigator.bluetooth, (kind, detail) => {
     else uartLog(`RX  ${Array.from(detail.data, hex).join(' ')}  | ${JSON.stringify(uartDecoder.decode(detail.data, { stream: true }))}`);
   }
   if (kind === 'uart-error') uartLog(`ERROR  ${detail}`);
-  if (kind === 'disconnected') { uartDecoder.decode(); uartLog('Disconnected'); }
+  if (kind === 'disconnected') { $('scan-results').replaceChildren(); $('scan-status').textContent = 'Connect and scan to discover devices.'; uartDecoder.decode(); uartLog('Disconnected'); }
   if (kind === 'unexpected') toast('Ignored an unsolicited or late response.');
   updateControls();
 });
@@ -47,12 +48,15 @@ function updateControls() {
   $('connect').disabled = connecting || !navigator.bluetooth || !window.isSecureContext;
   $('connect').textContent = connecting ? 'Connecting…' : 'Connect device ＋';
   $('disconnect').hidden = !connected;
-  $('uart-send').disabled = !connected || !bridge.uartRx || uartSending || busy;
+  $('uart-send').disabled = !connected || !bridge.uartRx || uartSending || busy || scanning;
+  $('scan').disabled = !connected || busy || uartSending || scanning || bridge.tainted;
+  $('scan').textContent = scanning ? 'Scanning…' : 'Scan I²C bus';
+  $('sample').hidden = activeTab !== 'i2c';
   $('uart-status').textContent = connected ? (bridge.uartRx ? 'UART ready · receiving live data' : bridge.uartUnavailableReason || 'UART unavailable. Reconnect to refresh device services.') : 'Connect to check UART availability.';
   const valid = validate();
-  $('send').disabled = !connected || uartSending || busy || !valid || bridge.tainted;
+  $('send').disabled = !connected || uartSending || busy || scanning || !valid || bridge.tainted;
   $('send').textContent = busy ? 'Waiting for response…' : bridge.tainted ? 'Reconnect to continue' : 'Send transaction ↗';
-  ['address', 'write-data', 'read-length'].forEach(id => $(id).disabled = busy);
+  ['address', 'write-data', 'read-length'].forEach(id => $(id).disabled = busy || scanning);
 }
 $('connect').addEventListener('click', async () => {
   if (!navigator.bluetooth) return;
@@ -67,7 +71,7 @@ $('disconnect').addEventListener('click', () => bridge.disconnect());
 ['address', 'write-data', 'read-length'].forEach(id => $(id).addEventListener('input', updateControls));
 $('command-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (busy || uartSending || !validate() || !bridge.connected || bridge.tainted) return;
+  if (busy || uartSending || scanning || !validate() || !bridge.connected || bridge.tainted) return;
   const request = makeRequest(nextId++, $('address').value, $('write-data').value, $('read-length').value);
   busy = true; updateControls();
   $('response-badge').className = 'subtle pending-animation'; $('response-badge').textContent = 'In progress…';
@@ -82,7 +86,7 @@ $('command-form').addEventListener('submit', async event => {
   } finally { busy = false; updateControls(); }
 });
 document.addEventListener('keydown', event => {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !$('send').disabled) { event.preventDefault(); $('command-form').requestSubmit(); }
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeTab === 'i2c' && !$('send').disabled) { event.preventDefault(); $('command-form').requestSubmit(); }
 });
 function renderResponse() {
   const { request, result, sample } = current;
@@ -141,7 +145,7 @@ function renderHistory() {
 async function copyText(text) { try { await navigator.clipboard.writeText(text); toast('Hex bytes copied.'); } catch { toast('Clipboard is unavailable. Select the hex bytes to copy them.'); } }
 $('clear').addEventListener('click', () => { history = []; renderHistory(); });
 $('sample').addEventListener('click', () => {
-  if (busy) return;
+  if (busy || scanning) return;
   const request = makeRequest(0, '50', '10', '4');
   current = { request, time:new Date(), sample:true, result:{ status:0, data:Uint8Array.from([0xA0,0x3C,0x81,0]), message:'Sample' } };
   selected = 0; history.unshift(current); renderResponse(); renderHistory();
@@ -166,3 +170,48 @@ $('uart-form').addEventListener('submit', async event => {
   finally { uartSending = false; updateControls(); }
 });
 $('uart-clear').addEventListener('click', () => { $('uart-log').textContent = ''; });
+
+function selectTab(name, focus = false) {
+  activeTab = name;
+  for (const bus of ['i2c', 'uart']) {
+    const selected = name === bus;
+    $(`tab-${bus}`).setAttribute('aria-selected', String(selected));
+    $(`tab-${bus}`).tabIndex = selected ? 0 : -1;
+    $(`panel-${bus}`).hidden = !selected;
+  }
+  if (focus) $(`tab-${name}`).focus();
+  updateControls();
+}
+for (const bus of ['i2c', 'uart']) {
+  $(`tab-${bus}`).addEventListener('click', () => selectTab(bus));
+  $(`tab-${bus}`).addEventListener('keydown', event => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      selectTab(event.key === 'Home' ? 'i2c' : event.key === 'End' ? 'uart' : bus === 'i2c' ? 'uart' : 'i2c', true);
+    }
+  });
+}
+$('scan').addEventListener('click', async () => {
+  if ($('scan').disabled) return;
+  scanning = true;
+  $('scan-results').replaceChildren();
+  $('scan-status').textContent = 'Scanning 0x08–0x77…';
+  updateControls();
+  try {
+    const result = await bridge.transact(makeScanRequest(nextId++));
+    const addresses = scanAddresses(result);
+    $('scan-status').textContent = addresses.length ? `${addresses.length} responding ${addresses.length === 1 ? 'address' : 'addresses'} · select one to use below.` : 'Scan complete. No addresses responded. Check target power, wiring and pull-ups.';
+    for (const address of addresses) {
+      const button = node('button', 'button secondary mono', `0x${hex(address)}`);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        if (busy || scanning) return;
+        $('address').value = hex(address); updateControls();
+        $('scan-status').textContent = `Selected 0x${hex(address)} for the next transaction.`;
+        $('address').focus();
+      });
+      $('scan-results').append(button);
+    }
+  } catch (e) { $('scan-status').textContent = `Scan failed: ${e.message}`; }
+  finally { scanning = false; updateControls(); }
+});

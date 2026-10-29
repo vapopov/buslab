@@ -87,3 +87,18 @@ should report an I2C error. Stuck transfers report a firmware timeout after
 busy; release the stuck lines or reset the board if needed. These replies are
 completed transactions, so the console keeps the connection usable. A browser
 response timeout still requires reconnecting because delivery is uncertain.
+
+## Bus tabs and scan
+
+I2C is the default tab. UART has a separate tab; the Bluetooth connection is shared
+and UART reception continues while I2C is visible. Switching tabs preserves inputs
+and logs. Use the arrow keys, Home or End to navigate the tabs by keyboard.
+
+After flashing the latest firmware, click **Scan I2C bus** in the I2C tab. It checks
+0x08 through 0x77 and displays responding addresses as buttons. Click an address
+to use it in the transaction form. Scan results are cleared on disconnect.
+
+Scanning reads one byte per address; it may consume data or change state on some
+devices and may not find write-only devices. Bus errors/timeouts are shown as scan
+failures rather than an empty result. Scan requests use the existing I2C service,
+so no new Bluetooth service permission or identity is needed for this upgrade.
