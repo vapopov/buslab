@@ -1,5 +1,7 @@
 # XIAO nRF52840 BLE-to-I²C + UART bridge
 
+Licensed under the [MIT License](LICENSE).
+
 A complete no_std Embassy firmware project. The nRF52840 is a BLE peripheral
 and an I2C master/controller plus a full-duplex UART bridge. This package replaces the earlier incomplete snippets.
 

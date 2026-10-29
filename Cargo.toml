@@ -2,6 +2,7 @@
 name = "embassy-nrf-i2c-bridge"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 embassy-executor = { version = "=0.10.0", features = ["platform-cortex-m", "executor-thread", "defmt"] }
