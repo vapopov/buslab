@@ -343,3 +343,41 @@ instead of claiming success. These steps and failure paths are tested with a
 protocol model; actual patch acceptance, clock stretching, electrical behavior,
 and CRC results must be tested on the user's TPS25751. No physical loading was
 performed here. To replace a saved older script, click Load example into editor.
+
+## UF2 builds and GitHub releases
+
+The **Build firmware UF2** GitHub Actions workflow can be run manually from the
+Actions tab. Download `buslab-xiao-nrf52840` from the run's artifacts and extract
+the `.uf2`. Pushing a `v*` tag also creates a draft GitHub Release with UF2, raw
+binary, debug ELF, and SHA-256 checksums. Review and test before publishing it.
+Pull requests affecting firmware or packaging also build the artifact.
+
+The `xiao-uf2` feature selects `memory-xiao-uf2.x`: application flash starts at
+`0x27000` and ends before `0xF4000`; RAM starts at `0x20008000` to preserve the
+bootloader's lower RAM and double-reset marker. It initializes VTOR to the app's
+vector table. This targets the stock XIAO Adafruit bootloader with S140 v7 left
+in flash; the application still runs MPSL/SDC rather than enabling S140.
+Other bootloader layouts require a matching build. Physical boot, BLE, I2C and
+UART validation of this UF2 build is still required.
+
+The default SWD build retains the original address-zero layout in `memory-swd.x`.
+`memory.x` includes the layout selected by `build.rs` from the build output
+folder, using a distinct filename to avoid the linker choosing the root file.
+
+Local packaging with the Rust utilities (Rust 1.93 or later required by the
+locked dependencies):
+
+```sh
+rustup target add thumbv7em-none-eabihf
+rustup component add llvm-tools-preview
+cargo install cargo-binutils --version 0.3.6 --locked
+cargo install uf2conv --version 0.1.0 --locked
+cargo objcopy --release --locked --features xiao-uf2 --bin embassy-nrf-i2c-bridge -- -O binary buslab-xiao-nrf52840.bin
+uf2conv buslab-xiao-nrf52840.bin --base 0x27000 --family 0xADA52840 --output buslab-xiao-nrf52840.uf2
+python3 scripts/verify-uf2.py buslab-xiao-nrf52840.bin buslab-xiao-nrf52840.uf2
+```
+
+With the compatible bootloader installed, double-press Reset and copy the UF2 to
+its USB drive. The UF2 contains only the application; it does not install or
+restore the bootloader. If BLE does not start after copying, try a physical reset
+and report the bootloader version along with the firmware version.

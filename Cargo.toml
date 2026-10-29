@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+# Stock XIAO Adafruit/S140 v7 bootloader application slot.
+xiao-uf2 = ["cortex-m-rt/set-vtor"]
+
 [dependencies]
 embassy-executor = { version = "=0.10.0", features = ["platform-cortex-m", "executor-thread", "defmt"] }
 embassy-nrf = { version = "=0.11.0", features = ["nrf52840", "time-driver-rtc1", "time", "defmt"] }

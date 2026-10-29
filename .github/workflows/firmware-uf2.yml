@@ -1,0 +1,73 @@
+name: Build firmware UF2
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'memory*.x'
+      - '.cargo/**'
+      - 'scripts/verify-uf2.py'
+      - '.github/workflows/firmware-uf2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target and LLVM tools
+        run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools-preview --target thumbv7em-none-eabihf
+          rustup default stable
+      - name: Install libclang for Nordic bindings
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libclang-dev
+      - name: Install Rust packaging utilities
+        run: |
+          cargo install cargo-binutils --version 0.3.6 --locked
+          cargo install uf2conv --version 0.1.0 --locked
+      - name: Build bootloader application and extract binary
+        run: |
+          mkdir -p dist
+          cargo objcopy --release --locked --features xiao-uf2 --target thumbv7em-none-eabihf --bin embassy-nrf-i2c-bridge -- -O binary dist/buslab-xiao-nrf52840.bin
+          cp target/thumbv7em-none-eabihf/release/embassy-nrf-i2c-bridge dist/buslab-xiao-nrf52840.elf
+      - name: Convert binary with Rust uf2conv
+        run: |
+          uf2conv dist/buslab-xiao-nrf52840.bin --base 0x27000 --family 0xADA52840 --output dist/buslab-xiao-nrf52840.uf2
+          python3 scripts/verify-uf2.py dist/buslab-xiao-nrf52840.bin dist/buslab-xiao-nrf52840.uf2
+          cd dist
+          sha256sum buslab-xiao-nrf52840.bin buslab-xiao-nrf52840.elf buslab-xiao-nrf52840.uf2 > SHA256SUMS
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: buslab-xiao-nrf52840
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: buslab-xiao-nrf52840
+          path: dist
+      - name: Create draft release with firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "$RELEASE_TAG" --notes "XIAO nRF52840 UF2 test build for the stock Adafruit/S140 v7 bootloader (application at 0x27000). Physical boot, BLE, I2C and UART validation is required before publishing."
